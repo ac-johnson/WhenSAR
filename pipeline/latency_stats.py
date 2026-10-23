@@ -14,7 +14,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import http_session as http
-from nisar_names import parse
 
 ASF_SEARCH = "https://api.daac.asf.alaska.edu/services/search/param"
 CMR_UMM = "https://cmr.earthdata.nasa.gov/search/granules.umm_json"
@@ -24,7 +23,7 @@ S1_COLLECTIONS = {
     "S1_RTC": ["C2777436413-ASF"],  # OPERA_L2_RTC-S1_V1
     "S1_CSLC": ["C2777443834-ASF"],  # OPERA_L2_CSLC-S1_V1
 }
-PRODUCTS = ["RSLC", "GSLC", "GCOV", "GUNW"]
+PRODUCTS = ["L0B", "RSLC", "GSLC", "GCOV", "GUNW"]
 PER_DAY = 100
 
 
@@ -54,10 +53,10 @@ def latencies(granules):
     """Hours from acquisition end to first processing; reprocessed copies are ignored."""
     first = {}
     for g in granules:
-        name = parse(g["sceneName"])
-        if not name or not g.get("processingDate"):
+        if not g.get("processingDate"):
             continue
-        key = (name["track"], name["frame"], g["stopTime"])
+        # One acquisition (L0B has no frame, so key on ASF's fields rather than the name)
+        key = (g.get("pathNumber"), g.get("frameNumber"), g["stopTime"])
         hours = (_ts(g["processingDate"]) - _ts(g["stopTime"])).total_seconds() / 3600
         first[key] = min(hours, first.get(key, hours))
     return list(first.values())

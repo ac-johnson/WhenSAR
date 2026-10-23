@@ -52,6 +52,11 @@ track (relative orbit + direction); Sentinel-1C and 1D alternate on the same tra
 - Interferograms: no systematic global product; the card links to ASF HyP3 on-demand InSAR
   and notes ARIA GUNW where it exists.
 
+## Map projections
+The selector at the top right switches between Geographic (MapLibre, Web Mercator) and
+Arctic / Antarctic polar stereographic views (EPSG:3413 / 3031; OpenLayers with NASA GIBS
+Blue Marble tiles, loaded only when first chosen). The choice is remembered in the browser.
+
 ## Phone / offline use
 WhenSAR is a Progressive Web App: open the site on a phone and use the browser's
 "Add to Home Screen" / "Install app" to get an app icon. Tap ☆ on a location to save it;

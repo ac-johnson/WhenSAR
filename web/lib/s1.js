@@ -51,7 +51,6 @@ export function buildTracks(plan, scenes, meta, lon, lat, now = Date.now()) {
   for (const f of plan) {
     const p = f.properties;
     track(p).passes.push({ time: timeOver(p, lon, lat), sat: p.sat, mode: p.mode, pol: p.pol, projected: false });
-    track(p).planFootprint ??= f;
   }
   for (const f of scenes) {
     const p = f.properties;
@@ -81,7 +80,8 @@ export function buildTracks(plan, scenes, meta, lon, lat, now = Date.now()) {
     t.passes.sort((a, b) => a.time - b.time);
     t.next = t.passes[0] || null;
     t.lastSeen = t.acq[0]?.time || null;
-    t.feature = t.footprint || t.planFootprint;
+    // Only real scene footprints are drawn: plan datatakes are strips thousands of km long
+    t.feature = t.footprint;
   }
   return [...tracks.values()]
     .filter((t) => t.next || t.acq.length)

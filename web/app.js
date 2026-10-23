@@ -6,6 +6,7 @@ import { acquisitions, productDates, browseURL, vertexLink, PRODUCTS } from "./l
 import { loadSites, findSite, siteData, saveSite, refreshSite, removeSite } from "./lib/sites.js";
 import { buildTracks, s1Products, dispForTrack, describePol, s1VertexLink, HYP3_URL } from "./lib/s1.js";
 import { featuresAt } from "./lib/plan.js";
+import { createPolarMap } from "./lib/polarmap.js";
 
 const HOUR = 3600e3;
 const DAY = 24 * HOUR;
@@ -13,7 +14,7 @@ const PRODUCT_WINDOW_DAYS = 90;
 // ASF-stated typical latency for standard L1/L2 products; replaced by measured stats when available
 const DEFAULT_LATENCY = {
   source: "ASF typical",
-  RSLC: { p50: 48, p90: 72 }, GCOV: { p50: 48, p90: 72 }, GUNW: { p50: 54, p90: 80 },
+  L0B: { p50: 6, p90: 10 }, RSLC: { p50: 48, p90: 72 }, GCOV: { p50: 48, p90: 72 }, GUNW: { p50: 54, p90: 80 },
   S1_SLC: { p50: 10, p90: 24 }, S1_RTC: { p50: 12, p90: 48 }, S1_CSLC: { p50: 24, p90: 72 },
 };
 const MISSIONS = { nisar: "NISAR", s1: "Sentinel-1" };
@@ -23,7 +24,11 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 // NISAR is the default; Sentinel-1 is chosen with the switch (and kept in the link)
-const state = { mission: "nisar", marker: null, cards: [], point: null, offlineSince: null, raw: null, controller: null };
+const state = {
+  mission: "nisar", proj: "geo", marker: null, cards: [], point: null, offlineSince: null, raw: null, controller: null,
+  mapFeatures: [], fitFeatures: false, selected: 0,
+};
+const polarMaps = {}; // pole -> Promise of a polar map view (lib/polarmap.js)
 
 // Urgent Response timing is opt-in; the standard products stay the main estimate.
 const UR_KEY = "whensar.showUrgent";
@@ -92,6 +97,37 @@ function setMission(mission, reselect = true) {
 document.querySelectorAll(".mission-switch button").forEach((b) => b.addEventListener("click", () => setMission(b.dataset.m)));
 
 map.on("click", (e) => select(e.lngLat.lng, e.lngLat.lat));
+
+// Map projection: MapLibre for the default view; OpenLayers polar stereographic views
+// (Arctic / Antarctic) are created on first use. The choice is remembered in this browser.
+const PROJ_KEY = "whensar.projection";
+async function setProjection(proj) {
+  state.proj = proj;
+  $("proj").value = proj;
+  try { localStorage.setItem(PROJ_KEY, proj); } catch {}
+  $("map").hidden = proj !== "geo";
+  for (const pole of ["arctic", "antarctic"]) {
+    const el = $(`polar-${pole}`);
+    el.hidden = proj !== pole;
+  }
+  if (proj !== "geo" && !polarMaps[proj]) {
+    try {
+      polarMaps[proj] = createPolarMap($(`polar-${proj}`), proj, { onClick: (lon, lat) => select(lon, lat) });
+      await polarMaps[proj];
+    } catch {
+      delete polarMaps[proj];
+      alert("Couldn't load the polar map view.");
+      return setProjection("geo");
+    }
+  }
+  if (proj === "geo") map.resize();
+  drawMap(true);
+}
+$("proj").addEventListener("change", (e) => setProjection(e.target.value));
+try {
+  const saved = localStorage.getItem(PROJ_KEY);
+  if (saved && saved !== "geo") setProjection(saved);
+} catch {}
 $("close").addEventListener("click", () => {
   if (history.state?.selected && history.length > 1) history.back();
   else {
@@ -195,12 +231,12 @@ $("sites").addEventListener("click", (e) => {
 });
 
 function clearSelection() {
-  state.marker?.remove();
-  state.marker = null;
+  state.point = null;
   state.cards = [];
+  state.mapFeatures = [];
+  drawMap(false);
   $("panel").hidden = true;
   $("hint").hidden = false;
-  map.getSource("frames")?.setData({ type: "FeatureCollection", features: [] });
 }
 
 $("locate").addEventListener("click", () => {
@@ -219,11 +255,10 @@ async function select(lon, lat, fly = false, updateHistory = true) {
     else history.pushState({ selected: true }, "", url);
   }
 
-  state.marker?.remove();
-  state.marker = new maplibregl.Marker({ color: "#16181d" }).setLngLat([lon, lat]).addTo(map);
   $("hint").hidden = true;
 
   state.point = { lon, lat };
+  drawPoint();
   state.controller?.abort();
   state.controller = new AbortController();
   const mission = state.mission;
@@ -298,20 +333,49 @@ const positions = (g) => (g.type === "MultiPolygon" ? g.coordinates.flat(2) : g.
 
 // Draw each card's footprint (NISAR frame, or latest Sentinel-1 scene on the track)
 async function showOnMap(lon, lat, fly) {
-  await mapReady;
-  const features = state.cards.filter((c) => c.feature).map((c) => ({ ...c.feature, properties: { key: c.key, dir: c.dir || c.p.dir } }));
-  map.getSource("frames").setData({ type: "FeatureCollection", features });
-  highlight(0);
+  state.mapFeatures = state.cards.filter((c) => c.feature).map((c) => ({ ...c.feature, properties: { key: c.key, dir: c.dir || c.p.dir } }));
   // Sentinel-1 plan strips span thousands of km, so only fit to scene-sized footprints
-  const fit = features.filter((f) => state.mission === "nisar" || f.properties && state.cards.find((c) => c.key === f.properties.key)?.footprint);
-  if (fit.length) {
-    const b = new maplibregl.LngLatBounds();
-    fit.forEach((f) => positions(f.geometry).forEach(([x, y]) => b.extend([x, y])));
-    map.fitBounds(b, { padding: panelPadding(), maxZoom: 8, duration: fly ? 1200 : 600 });
-  } else if (fly || state.mission === "s1") {
-    map.flyTo({ center: [lon, lat], zoom: 6 });
+  state.fitFeatures = state.mission === "nisar" || state.cards.some((c) => c.footprint);
+  state.selected = 0;
+  await drawMap(fly);
+}
+
+function drawPoint() {
+  const p = state.point;
+  if (state.proj === "geo") {
+    state.marker?.remove();
+    state.marker = p ? new maplibregl.Marker({ color: "#16181d" }).setLngLat([p.lon, p.lat]).addTo(map) : null;
+  } else {
+    polarMaps[state.proj]?.then((m) => m.setPoint(p && [p.lon, p.lat]));
   }
 }
+
+// Apply the current selection (point, footprints, highlighted card) to the active map view
+async function drawMap(fly) {
+  drawPoint();
+  const features = state.mapFeatures;
+  const fitTo = state.fitFeatures ? features.filter((f) => state.mission === "nisar" || state.cards.find((c) => c.key === f.properties.key)?.footprint) : [];
+  if (state.proj !== "geo") {
+    const m = await polarMaps[state.proj];
+    if (!m) return;
+    m.setFootprints(features);
+    highlight(state.selected);
+    if (state.point) m.fit(panelPadding(), fitTo.length > 0);
+    return;
+  }
+  await mapReady;
+  map.getSource("frames").setData({ type: "FeatureCollection", features });
+  highlight(state.selected);
+  if (!state.point) return;
+  if (fitTo.length) {
+    const b = new maplibregl.LngLatBounds();
+    fitTo.forEach((f) => positions(f.geometry).forEach(([x, y]) => b.extend([x, y])));
+    map.fitBounds(b, { padding: panelPadding(), maxZoom: 8, duration: fly ? 1200 : 600 });
+  } else if (fly || state.mission === "s1") {
+    map.flyTo({ center: [state.point.lon, state.point.lat], zoom: 6 });
+  }
+}
+
 
 function panelPadding() {
   return isPhone()
@@ -395,6 +459,7 @@ function cardHTML(c, zone, modes, latency, meta) {
     <div class="section"><h3 class="h3-row">Expected data availability
       <label class="switch" title="Also show Urgent Response timing"><input type="checkbox" class="ur-toggle"><span class="track"></span>Urgent</label></h3>
       <div class="rows">
+      <span class="k">L0B (raw)</span><span>${avail("L0B")}</span>
       ${produce.has("gcov") || produce.has("gslc") ? `<span class="k">GCOV / GSLC</span><span>${avail("GCOV", "GCOV")}</span>` : `<span class="k">RSLC</span><span>${avail("RSLC", "RSLC")}</span>`}
       ${gunwPossible ? `<span class="k">Interferogram</span><span>${avail("GUNW", "GUNW")}${c.rates.byProduct.GUNW === 0 ? "" : `<br><span class="sub">GUNW with ${fmtDate(prev.time, zone)} acquisition</span>`}</span>` : ""}
       ${latency.UR_GCOV?.p50 ? `<span class="k ur-row">Urgent GCOV</span><span class="ur-row">${avail("UR_GCOV", "GCOV")}</span>` : ""}
@@ -612,8 +677,11 @@ function setupPager() {
 }
 
 function highlight(i) {
-  if (map.getSource("frames")) {
+  state.selected = i;
+  if (state.proj === "geo" && map.getSource("frames")) {
     state.cards.forEach((c, j) => map.setFeatureState({ source: "frames", id: c.key }, { selected: j === i }));
+  } else if (state.proj !== "geo") {
+    polarMaps[state.proj]?.then((m) => m.highlight(state.cards[i]?.key));
   }
   const pos = $("pos");
   if (pos) pos.textContent = `${i + 1} / ${state.cards.length}`;

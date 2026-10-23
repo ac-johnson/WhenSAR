@@ -6,7 +6,7 @@
 //   saved sites carry their own copy of the frame data instead.
 // - Map tiles and other sites: not handled (the basemap needs a connection).
 
-const CACHE = "whensar-v2";
+const CACHE = "whensar-v3";
 const SHELL = [
   "./",
   "index.html",
@@ -20,6 +20,7 @@ const SHELL = [
   "lib/history.js",
   "lib/sites.js",
   "lib/s1.js",
+  "lib/polarmap.js",
   "vendor/maplibre-gl.js",
   "vendor/maplibre-gl.css",
   "vendor/flatgeobuf-geojson.min.js",

@@ -18,6 +18,13 @@
 </head>
 <body>
   <div id="map"></div>
+  <div id="polar-arctic" class="polar" hidden></div>
+  <div id="polar-antarctic" class="polar" hidden></div>
+  <select id="proj" class="proj" aria-label="Map projection" title="Map projection">
+    <option value="geo">Geographic</option>
+    <option value="arctic">Arctic</option>
+    <option value="antarctic">Antarctic</option>
+  </select>
   <header class="topbar">
     <span class="brand">WhenSAR</span>
     <div class="mission-switch" role="group" aria-label="Mission">
