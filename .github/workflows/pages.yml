@@ -34,7 +34,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: pipeline/cache
-          # A cache miss triggers a one-time backfill (~20 min); later runs are incremental
+          # NISAR granule index + Sentinel-1 scene index. A cache miss triggers one-time
+          # backfills (~20 + ~30 min); later runs are incremental
           key: granule-index-v1-${{ github.run_id }}
           restore-keys: granule-index-v1-
 
@@ -45,6 +46,8 @@ jobs:
         run: |
           python pipeline/granule_index.py
           python pipeline/snapshot_rop.py
+          python pipeline/s1_plan.py
+          python pipeline/s1_index.py
           python pipeline/latency_stats.py
 
       - uses: actions/upload-pages-artifact@v3

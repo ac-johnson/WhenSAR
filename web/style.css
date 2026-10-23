@@ -33,8 +33,12 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
 .topbar { position: fixed; top: 12px; left: 12px; display: flex; gap: 8px; align-items: center;
   background: var(--bg); padding: 6px 8px 6px 14px; border-radius: 999px; box-shadow: var(--shadow); z-index: 2; }
 .brand { font-weight: 700; letter-spacing: 0.2px; }
-.mission { font-size: 12px; background: var(--chip); padding: 2px 8px; border-radius: 999px; color: var(--muted); }
-.topbar button { border: 0; background: var(--chip); color: var(--fg); width: 32px; height: 32px;
+.mission-switch { display: inline-flex; flex: none; background: var(--chip); border-radius: 999px; padding: 2px; }
+.topbar > * { flex: none; white-space: nowrap; }
+.mission-switch button { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12px;
+  padding: 3px 9px; border-radius: 999px; cursor: pointer; }
+.mission-switch button[aria-pressed="true"] { background: var(--bg); color: var(--fg); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+.topbar > button { border: 0; background: var(--chip); color: var(--fg); width: 32px; height: 32px;
   border-radius: 50%; font-size: 18px; cursor: pointer; }
 
 .hint { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--bg);
@@ -45,6 +49,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
   top: 64px; left: 12px; bottom: 12px; width: 380px; border-radius: 14px; overflow: hidden; }
 .grabber { display: none; }
 @media (max-width: 640px) {
+  .maplibregl-ctrl-top-right { display: none; } /* pinch to zoom; frees room for the top bar */
   .panel { top: auto; left: 0; right: 0; bottom: 0; width: auto; height: 62vh; border-radius: 14px 14px 0 0;
     transition: height 0.22s ease; overscroll-behavior: contain; }
   .card { overscroll-behavior: contain; }
@@ -110,9 +115,6 @@ body:not(.show-ur) .ur-row { display: none; }
 .freq .bar { height: 6px; border-radius: 3px; background: var(--chip); overflow: hidden; }
 .freq .bar span { display: block; height: 100%; background: var(--asc); border-radius: 3px; }
 .freq .pct { text-align: right; font-variant-numeric: tabular-nums; }
-.ur-info { margin-top: 6px; }
-.ur-info summary { cursor: pointer; }
-.ur-info ul { margin: 4px 0; padding-left: 18px; }
 .chip.projected { background: transparent; border: 1px dashed var(--line); color: var(--muted); }
 .projected-tag { color: var(--warn); }
 

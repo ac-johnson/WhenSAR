@@ -20,7 +20,9 @@
   <div id="map"></div>
   <header class="topbar">
     <span class="brand">WhenSAR</span>
-    <span class="mission">NISAR</span>
+    <div class="mission-switch" role="group" aria-label="Mission">
+      <button data-m="nisar" aria-pressed="true">NISAR</button><button data-m="s1" aria-pressed="false">Sentinel-1</button>
+    </div>
     <button id="locate" title="Use my location" aria-label="Use my location">◎</button>
     <button id="sites-btn" title="Saved sites" aria-label="Saved sites" aria-expanded="false">★</button>
   </header>

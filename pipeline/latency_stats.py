@@ -17,6 +17,13 @@ import http_session as http
 from nisar_names import parse
 
 ASF_SEARCH = "https://api.daac.asf.alaska.edu/services/search/param"
+CMR_UMM = "https://cmr.earthdata.nasa.gov/search/granules.umm_json"
+# Sentinel-1 products: ASF's processingDate is the acquisition time, so use CMR insert dates
+S1_COLLECTIONS = {
+    "S1_SLC": ["C3470873558-ASF", "C4175278193-ASF"],  # SENTINEL-1C_SLC, SENTINEL-1D_SLC
+    "S1_RTC": ["C2777436413-ASF"],  # OPERA_L2_RTC-S1_V1
+    "S1_CSLC": ["C2777443834-ASF"],  # OPERA_L2_CSLC-S1_V1
+}
 PRODUCTS = ["RSLC", "GSLC", "GCOV", "GUNW"]
 PER_DAY = 100
 
@@ -56,6 +63,26 @@ def latencies(granules):
     return list(first.values())
 
 
+def cmr_insert_latencies(session, collections, start, end, per_collection=300):
+    """Hours from acquisition end to CMR insert (when the granule became searchable)."""
+    hours = []
+    for c in collections:
+        r = session.get(
+            CMR_UMM,
+            params={"collection_concept_id": c, "temporal": f"{start:%Y-%m-%dT%H:%M:%SZ},{end:%Y-%m-%dT%H:%M:%SZ}",
+                    "page_size": per_collection, "sort_key": "-start_date"},
+            timeout=300,
+        )
+        r.raise_for_status()
+        for item in r.json()["items"]:
+            u = item["umm"]
+            inserted = next((p["Date"] for p in u.get("ProviderDates", []) if p["Type"] == "Insert"), None)
+            if inserted:
+                end_t = u["TemporalExtent"]["RangeDateTime"]["EndingDateTime"]
+                hours.append((_ts(inserted) - _ts(end_t)).total_seconds() / 3600)
+    return hours
+
+
 def summarize(hours):
     if len(hours) < 10:
         return None
@@ -86,6 +113,11 @@ def main():
             hours += latencies(sample(session, product, today - timedelta(days=back), "UR"))
         result[f"UR_{product}"] = summarize(hours) if len(hours) >= 10 else ({"n": len(hours)} if hours else None)
         print("UR", product, result[f"UR_{product}"])
+
+    # Sentinel-1: sample acquisitions from 6-9 days ago (old enough that slow ones have arrived)
+    for key, collections in S1_COLLECTIONS.items():
+        result[key] = summarize(cmr_insert_latencies(session, collections, today - timedelta(days=9), today - timedelta(days=6)))
+        print(key, result[key])
 
     result["generated_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     args.out.mkdir(parents=True, exist_ok=True)

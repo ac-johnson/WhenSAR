@@ -6,7 +6,7 @@
 //   saved sites carry their own copy of the frame data instead.
 // - Map tiles and other sites: not handled (the basemap needs a connection).
 
-const CACHE = "whensar-v1";
+const CACHE = "whensar-v2";
 const SHELL = [
   "./",
   "index.html",
@@ -19,6 +19,7 @@ const SHELL = [
   "lib/timefmt.js",
   "lib/history.js",
   "lib/sites.js",
+  "lib/s1.js",
   "vendor/maplibre-gl.js",
   "vendor/maplibre-gl.css",
   "vendor/flatgeobuf-geojson.min.js",
@@ -27,6 +28,7 @@ const SHELL = [
   "data/nisar_modes.json",
   "data/nisar_latency.json",
   "data/nisar_plan_meta.json",
+  "data/s1_plan_meta.json",
 ];
 
 self.addEventListener("install", (event) => {

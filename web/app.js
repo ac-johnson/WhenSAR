@@ -3,18 +3,27 @@ import { framePasses, nextIndex, countdown } from "./lib/passes.js";
 import { describeMode, describeFileMode, planBandwidths, fileBandwidths, sameBandwidths } from "./lib/modes.js";
 import { zoneAt, fmtLocal, fmtDate, fmtUTC, fmtRange } from "./lib/timefmt.js";
 import { acquisitions, productDates, browseURL, vertexLink, PRODUCTS } from "./lib/history.js";
-import { loadSites, findSite, saveSite, refreshSite, removeSite } from "./lib/sites.js";
+import { loadSites, findSite, siteData, saveSite, refreshSite, removeSite } from "./lib/sites.js";
+import { buildTracks, s1Products, dispForTrack, describePol, s1VertexLink, HYP3_URL } from "./lib/s1.js";
+import { featuresAt } from "./lib/plan.js";
 
 const HOUR = 3600e3;
 const DAY = 24 * HOUR;
 const PRODUCT_WINDOW_DAYS = 90;
 // ASF-stated typical latency for standard L1/L2 products; replaced by measured stats when available
-const DEFAULT_LATENCY = { source: "ASF typical", RSLC: { p50: 48, p90: 72 }, GCOV: { p50: 48, p90: 72 }, GUNW: { p50: 54, p90: 80 } };
+const DEFAULT_LATENCY = {
+  source: "ASF typical",
+  RSLC: { p50: 48, p90: 72 }, GCOV: { p50: 48, p90: 72 }, GUNW: { p50: 54, p90: 80 },
+  S1_SLC: { p50: 10, p90: 24 }, S1_RTC: { p50: 12, p90: 48 }, S1_CSLC: { p50: 24, p90: 72 },
+};
+const MISSIONS = { nisar: "NISAR", s1: "Sentinel-1" };
+const S1_MODES = { IW: "Interferometric Wide swath", EW: "Extra Wide swath", SM: "Stripmap" };
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
-const state = { marker: null, cards: [], point: null, offlineSince: null };
+// NISAR is the default; Sentinel-1 is chosen with the switch (and kept in the link)
+const state = { mission: "nisar", marker: null, cards: [], point: null, offlineSince: null, raw: null, controller: null };
 
 // Urgent Response timing is opt-in; the standard products stay the main estimate.
 const UR_KEY = "whensar.showUrgent";
@@ -27,6 +36,7 @@ try { setUrgent(localStorage.getItem(UR_KEY) === "1"); } catch {}
 const modesP = fetch("data/nisar_modes.json").then((r) => r.json()).catch(() => ({}));
 const latencyP = fetch("data/nisar_latency.json").then((r) => (r.ok ? r.json() : DEFAULT_LATENCY)).catch(() => DEFAULT_LATENCY);
 const metaP = fetch("data/nisar_plan_meta.json").then((r) => r.json()).catch(() => ({}));
+const s1MetaP = fetch("data/s1_plan_meta.json").then((r) => r.json()).catch(() => ({}));
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 
@@ -52,19 +62,34 @@ const mapReady = new Promise((resolve) => map.on("load", resolve)).then(() => {
 
 // Browser history: the first selection pushes an entry so Back clears it instead of leaving
 // the site; later selections replace it. A shared link gets the same treatment.
-const parseHash = () => location.hash.match(/^#(-?[\d.]+),(-?[\d.]+)$/);
+// Links look like #34.05,-118.25 (NISAR) or #s1/34.05,-118.25 (Sentinel-1)
+const parseHash = () => {
+  const m = location.hash.match(/^#(?:(s1)\/)?(-?[\d.]+),(-?[\d.]+)$/);
+  return m && { mission: m[1] || "nisar", lat: +m[2], lon: +m[3] };
+};
+const hashFor = (lat, lon) => `#${state.mission === "s1" ? "s1/" : ""}${lat.toFixed(4)},${lon.toFixed(4)}`;
 const fromHash = parseHash();
 if (fromHash) {
   history.replaceState(null, "", location.pathname);
-  select(+fromHash[2], +fromHash[1], true);
+  setMission(fromHash.mission, false);
+  select(fromHash.lon, fromHash.lat, true);
 }
 window.addEventListener("popstate", () => {
   const h = parseHash();
   if (h) {
     history.replaceState({ selected: true }, "", location.hash);
-    select(+h[2], +h[1], true, false);
+    setMission(h.mission, false);
+    select(h.lon, h.lat, true, false);
   } else clearSelection();
 });
+
+function setMission(mission, reselect = true) {
+  state.mission = mission;
+  document.querySelectorAll(".mission-switch button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.m === mission)));
+  $("hint").textContent = `Tap the map to see when ${MISSIONS[mission]} images that spot`;
+  if (reselect && state.point) select(state.point.lon, state.point.lat, false);
+}
+document.querySelectorAll(".mission-switch button").forEach((b) => b.addEventListener("click", () => setMission(b.dataset.m)));
 
 map.on("click", (e) => select(e.lngLat.lng, e.lngLat.lat));
 $("close").addEventListener("click", () => {
@@ -126,6 +151,7 @@ function updateSaveButton() {
   $("save").textContent = saved ? "★" : "☆";
   $("save").classList.toggle("on", !!saved);
   $("save").title = saved ? "Remove from saved sites" : "Save this site (works offline)";
+  $("save").hidden = !!state.offlineSince && !saved;
 }
 $("save").addEventListener("click", () => {
   const { lat, lon } = state.point;
@@ -134,7 +160,7 @@ $("save").addEventListener("click", () => {
   else {
     const name = prompt("Name this site", `${lat.toFixed(3)}, ${lon.toFixed(3)}`);
     if (name === null) return;
-    if (!saveSite(lat, lon, name.trim() || `${lat.toFixed(3)}, ${lon.toFixed(3)}`, state.cards.map((c) => c.f))) {
+    if (!saveSite(lat, lon, name.trim() || `${lat.toFixed(3)}, ${lon.toFixed(3)}`, state.mission, state.raw)) {
       alert("Couldn't save: this browser is blocking storage.");
     }
   }
@@ -188,7 +214,7 @@ $("locate").addEventListener("click", () => {
 async function select(lon, lat, fly = false, updateHistory = true) {
   lon = ((((lon + 180) % 360) + 360) % 360) - 180;
   if (updateHistory) {
-    const url = `#${lat.toFixed(4)},${lon.toFixed(4)}`;
+    const url = hashFor(lat, lon);
     if (history.state?.selected) history.replaceState({ selected: true }, "", url);
     else history.pushState({ selected: true }, "", url);
   }
@@ -198,31 +224,50 @@ async function select(lon, lat, fly = false, updateHistory = true) {
   $("hint").hidden = true;
 
   state.point = { lon, lat };
+  state.controller?.abort();
+  state.controller = new AbortController();
+  const mission = state.mission;
   const t0 = performance.now();
-  // Offline (or the plan file unreachable): fall back to a saved copy of this site
+  const now = Date.now();
+  // Offline (or the data files unreachable): fall back to a saved copy of this site
   let offlineSince = null;
-  const framesP = framesAt(lon, lat).catch((err) => {
-    const site = findSite(lat, lon);
-    if (!site) throw err;
-    offlineSince = new Date(site.saved);
-    return site.frames;
-  });
-  let frames, modes, latency, meta;
+  const fromSaved = (err) => {
+    const saved = siteData(findSite(lat, lon), mission);
+    if (!saved) throw err;
+    offlineSince = new Date(saved.saved);
+    return saved.data;
+  };
+  const rawP = mission === "s1"
+    ? Promise.all([featuresAt("data/s1_plan.fgb", lon, lat), featuresAt("data/s1_scenes.fgb", lon, lat)])
+        .then(([plan, scenes]) => ({ plan, scenes })).catch(fromSaved)
+    : framesAt(lon, lat).catch(fromSaved);
+  let raw, modes, latency, meta, s1Meta;
   try {
-    [frames, modes, latency, meta] = await Promise.all([framesP, modesP, latencyP, metaP]);
+    [raw, modes, latency, meta, s1Meta] = await Promise.all([rawP, modesP, latencyP, metaP, s1MetaP]);
   } catch {
     $("panel").hidden = false;
     $("where").textContent = `${lat.toFixed(3)}, ${lon.toFixed(3)}`;
     $("pager").innerHTML = "";
-    $("cards").innerHTML = `<div class="card empty">Can't load NISAR data — you may be offline. Saved sites (★) can be viewed offline.</div>`;
+    $("cards").innerHTML = `<div class="card empty">Can't load ${MISSIONS[mission]} data — you may be offline. Saved sites (★) can be viewed offline.</div>`;
     return;
   }
-  if (!offlineSince) refreshSite(lat, lon, frames);
+  if (mission !== state.mission) return; // switched while loading
+  if (!offlineSince) refreshSite(lat, lon, mission, raw);
+  state.raw = raw;
   state.offlineSince = offlineSince;
   updateSaveButton();
   const zone = zoneAt(lat, lon);
-  const now = Date.now();
 
+  if (mission === "s1") {
+    state.cards = buildTracks(raw.plan, raw.scenes, s1Meta, lon, lat, now);
+    renderS1({ zone, latency, s1Meta });
+    console.info(`plan lookup + render: ${(performance.now() - t0).toFixed(0)} ms, ${state.cards.length} tracks`);
+    if (!offlineSince) fillS1Products(lon, lat, zone, latency, now, state.controller.signal);
+    await showOnMap(lon, lat, fly);
+    return;
+  }
+
+  const frames = raw;
   state.cards = frames
     .filter((f) => f.properties.ref_start) // frames with no processed data stay off the map
     .map((f) => {
@@ -245,19 +290,25 @@ async function select(lon, lat, fly = false, updateHistory = true) {
 
   render({ lon, lat, zone, modes, latency, meta });
   console.info(`plan lookup + render: ${(performance.now() - t0).toFixed(0)} ms, ${frames.length} frames`);
+  state.cards.forEach((c) => (c.feature = c.f));
+  await showOnMap(lon, lat, fly);
+}
 
+const positions = (g) => (g.type === "MultiPolygon" ? g.coordinates.flat(2) : g.type === "Polygon" ? g.coordinates.flat(1) : []);
+
+// Draw each card's footprint (NISAR frame, or latest Sentinel-1 scene on the track)
+async function showOnMap(lon, lat, fly) {
   await mapReady;
-  map.getSource("frames").setData({
-    type: "FeatureCollection",
-    features: state.cards.map((c) => ({ ...c.f, properties: { key: c.key, dir: c.p.dir } })),
-  });
+  const features = state.cards.filter((c) => c.feature).map((c) => ({ ...c.feature, properties: { key: c.key, dir: c.dir || c.p.dir } }));
+  map.getSource("frames").setData({ type: "FeatureCollection", features });
   highlight(0);
-
-  if (state.cards.length) {
+  // Sentinel-1 plan strips span thousands of km, so only fit to scene-sized footprints
+  const fit = features.filter((f) => state.mission === "nisar" || f.properties && state.cards.find((c) => c.key === f.properties.key)?.footprint);
+  if (fit.length) {
     const b = new maplibregl.LngLatBounds();
-    state.cards.forEach((c) => c.f.geometry.coordinates.flat(2).forEach(([x, y]) => b.extend([x, y])));
+    fit.forEach((f) => positions(f.geometry).forEach(([x, y]) => b.extend([x, y])));
     map.fitBounds(b, { padding: panelPadding(), maxZoom: 8, duration: fly ? 1200 : 600 });
-  } else if (fly) {
+  } else if (fly || state.mission === "s1") {
     map.flyTo({ center: [lon, lat], zoom: 6 });
   }
 }
@@ -349,17 +400,8 @@ function cardHTML(c, zone, modes, latency, meta) {
       ${latency.UR_GCOV?.p50 ? `<span class="k ur-row">Urgent GCOV</span><span class="ur-row">${avail("UR_GCOV", "GCOV")}</span>` : ""}
       ${gunwPossible && latency.UR_GUNW?.p50 ? `<span class="k ur-row">Urgent GUNW</span><span class="ur-row">${avail("UR_GUNW", "GUNW")}</span>` : ""}
     </div>
-    <details class="sub ur-row ur-info">
-      <summary>Urgent Response products are made only if this pass is tasked for it</summary>
-      NISAR's Smart Tasking Tool requests Urgent Response automatically for:
-      <ul>
-        <li>earthquakes with a USGS PAGER alert of Orange or Red, anywhere;</li>
-        <li>earthquakes in or within 240&nbsp;km of the U.S. or India with a PAGER alert of Yellow, or magnitude above 7.0 and shallower than 50&nbsp;km;</li>
-        <li>volcanoes with a USGS aviation notification of Orange or Red.</li>
-      </ul>
-      Authorized users at USGS, NOAA and NASA can also request it. Standard products are still made at the usual latency, and Urgent Response products are removed after 30 days.
-      <a href="https://nisar-docs.asf.alaska.edu/urgent-response/" target="_blank" rel="noopener">ASF documentation ↗</a>
-    </details>
+    <div class="sub ur-row" style="margin-top:4px">Urgent Response products are made only if this pass is tasked for it.
+      <a href="https://nisar-docs.asf.alaska.edu/urgent-response/" target="_blank" rel="noopener">ASF documentation ↗</a></div>
     <div class="sub" style="margin-top:4px">Median–90th percentile of recent processing times (${esc(latency.source || "measured")})</div></div>
     <div class="section"><h3>Following passes</h3><div class="upcoming">${upcoming || '<span class="sub">none in current plan</span>'}</div>${c.passes.slice(c.nextIdx + 1, c.nextIdx + 6).some((q) => q.projected) ? '<div class="sub" style="margin-top:4px">Dashed: projected beyond the published plan</div>' : ""}</div>
     ${productsSection(c, zone)}
@@ -412,6 +454,150 @@ function productsSection(c, zone) {
     <div class="sub" style="margin-bottom:6px">Share of ${span}</div>
     <div class="freq">${made.map((p) => `<span class="k">${p}</span><span class="bar"><span style="width:${byProduct[p]}%"></span></span><span class="pct">${byProduct[p]}%</span>`).join("")}</div>
     ${none.length ? `<div class="sub" style="margin-top:6px">None: ${none.join(", ")}</div>` : ""}</div>`;
+}
+
+// ---- Sentinel-1 ----
+
+function renderS1({ zone, latency, s1Meta }) {
+  $("panel").hidden = false;
+  setCollapsed(false);
+  state.zone = zone;
+  updateWhere();
+  const cards = $("cards");
+  if (!state.cards.length) {
+    cards.innerHTML = `<div class="card empty">No Sentinel-1 acquisitions here in the last 100 days or in ESA's current plan.</div>`;
+    $("pager").innerHTML = "";
+    return;
+  }
+  cards.innerHTML = state.cards.map((c) => s1CardHTML(c, zone, latency, s1Meta)).join("");
+  cards.scrollLeft = 0;
+  setupPager();
+}
+
+const satName = (sat) => `Sentinel-1${sat.slice(-1)}`;
+
+function s1CardHTML(c, zone, latency, s1Meta) {
+  const dirName = c.dir === "A" ? "Ascending" : "Descending";
+  const lat = (k) => latency[k] || DEFAULT_LATENCY[k];
+  const ids = (sat) => `<div class="frame-id"><span class="chip">Path ${c.path}</span><span class="chip ${c.dir === "A" ? "asc" : "desc"}">${dirName}</span>${sat ? `<span class="chip">${satName(sat)}</span>` : ""}</div>`;
+  const next = c.next;
+  if (!next) {
+    return `<section class="card" data-key="${c.key}">
+      <div class="next-label">Next pass</div><div class="next-time">Not in ESA's current plan</div>
+      ${ids()}${s1ProductsSection(c, zone)}${s1HistorySection(c, zone)}</section>`;
+  }
+  const t = next.time;
+  const win = (k) => fmtRange(new Date(+t + lat(k).p50 * HOUR), new Date(+t + lat(k).p90 * HOUR), zone);
+  const following = c.passes.slice(1, 6);
+  return `<section class="card" data-key="${c.key}">
+    <div class="next-label">Next pass · <span class="countdown" data-t="${+t}">${countdown(t - Date.now())}</span></div>
+    <div class="next-time">${fmtLocal(t, zone)}</div>
+    ${next.projected ? `<div class="note">Projected: ESA's published plan for ${satName(next.sat)} ends ${fmtDate(new Date(s1Meta.plan_end?.[next.sat]), zone)}. This assumes its 12-day repeat continues.</div>` : ""}
+    <div class="sub">${fmtUTC(t)}${zone !== Intl.DateTimeFormat().resolvedOptions().timeZone ? ` · your time ${fmtLocal(t, undefined)}` : ""}</div>
+    ${ids(next.sat)}
+    <div class="section"><h3>${next.projected ? "Expected" : "Planned"} mode</h3>
+      <div>${esc(next.mode)} (${esc(S1_MODES[next.mode] || next.mode)}), ${esc(describePol(next.pol))}</div></div>
+    <div class="section"><h3>Expected data availability</h3><div class="rows">
+      <span class="k">SLC / bursts</span><span>${win("S1_SLC")}</span>
+      <span class="k">OPERA RTC</span><span data-s1="rtc">${win("S1_RTC")}</span>
+      <span class="k">OPERA CSLC</span><span data-s1="cslc">${win("S1_CSLC")}</span>
+      <span class="k">Interferogram</span><span>Once the SLC is available, process one on demand with
+        <a href="${HYP3_URL}" target="_blank" rel="noopener">ASF HyP3 ↗</a><span data-s1="aria"></span></span>
+    </div><div class="sub" style="margin-top:4px">Median–90th percentile of recent processing times (${esc(latency.source || "measured")})</div></div>
+    <div class="section"><h3>Following passes</h3><div class="upcoming">${following.map((q) =>
+      `<span class="chip${q.projected ? " projected" : ""}" title="${satName(q.sat)}${q.projected ? ", projected beyond ESA's plan" : ""}">${fmtDate(q.time, zone)} · ${q.sat.slice(-1)}</span>`).join("") || '<span class="sub">none in current plan</span>'}</div>
+      <div class="sub" style="margin-top:4px">C / D: Sentinel-1C / 1D${following.some((q) => q.projected) ? "; dashed: projected beyond ESA's plan" : ""}</div></div>
+    ${s1ProductsSection(c, zone)}
+    ${s1HistorySection(c, zone)}
+  </section>`;
+}
+
+function s1ProductsSection(c, zone) {
+  const recent = c.acq.filter((a) => a.time >= Date.now() - PRODUCT_WINDOW_DAYS * DAY);
+  const gaps = recent.slice(1).map((a, i) => (recent[i].time - a.time) / DAY).sort((a, b) => a - b);
+  const every = gaps.length ? Math.round(gaps[Math.floor(gaps.length / 2)]) : null;
+  return `<div class="section"><h3>Products · last ${PRODUCT_WINDOW_DAYS} days</h3>
+    <div class="sub" style="margin-bottom:6px">${recent.length
+      ? `SLC: ${recent.length} acquisitions${every ? `, about every ${every} days` : ""}`
+      : "No SLC acquisitions here in this period (track is in ESA's plan)"}</div>
+    ${recent.length ? '<div data-s1="opera"><span class="loading">loading OPERA…</span></div>' : ""}
+    <div class="rows" style="margin-top:6px">
+      <span class="k">OPERA DISP</span><span data-s1="disp" class="loading">loading…</span>
+      <span class="k">ARIA GUNW</span><span data-s1="gunw" class="loading">loading…</span>
+    </div></div>`;
+}
+
+function s1HistorySection(c, zone) {
+  const vertex = `<div style="margin-top:6px"><a href="${s1VertexLink(c.path, state.point.lon, state.point.lat)}" target="_blank" rel="noopener">Open in ASF Vertex ↗</a></div>`;
+  if (!c.acq.length) return `<div class="section"><h3>History</h3><span class="sub">No acquisitions in the last 100 days.</span>${vertex}</div>`;
+  const last = c.acq[0];
+  return `<div class="section"><h3>History</h3>
+    <div class="rows">
+      <span class="k">Last acquired</span><span>${fmtLocal(last.time, zone)} · ${satName(last.sat)}</span>
+      <span class="k">Mode</span><span>${esc(last.mode)}, ${esc(describePol(last.pol))}</span>
+    </div>
+    <div class="upcoming" style="margin-top:6px">${c.acq.slice(0, 10).map((a) => `<span class="chip" title="${satName(a.sat)}">${fmtDate(a.time, zone)} · ${a.sat.slice(-1)}</span>`).join("")}</div>
+    ${vertex}</div>`;
+}
+
+// OPERA / ARIA products are queried live (too many granules to precompute); each part fills
+// in as its query returns
+function fillS1Products(lon, lat, zone, latency, now, signal) {
+  const { opera, disp, aria } = s1Products(lon, lat, new Date(now - PRODUCT_WINDOW_DAYS * DAY), signal);
+  const each = (fn) => state.cards.forEach((c) => {
+    const card = document.querySelector(`.card[data-key="${c.key}"]`);
+    if (card) fn(c, card);
+  });
+  const failed = (what) => (e) => {
+    if (e.name === "AbortError") return;
+    each((c, card) => {
+      const el = card.querySelector(`[data-s1="${what}"]`);
+      if (el) {
+        el.innerHTML = `<span class="sub">unavailable right now</span>`;
+        el.classList.remove("loading");
+      }
+    });
+  };
+
+  opera.then((prod) => each((c, card) => {
+    const rows = [];
+    for (const [kind, label] of [["rtc", "RTC"], ["cslc", "CSLC"]]) {
+      // Share of SLC acquisitions old enough to have been processed that have this product
+      const settle = (latency[`S1_${label}`] || DEFAULT_LATENCY[`S1_${label}`]).p90 * HOUR + 12 * HOUR;
+      const eligible = c.acq.filter((a) => a.time >= now - PRODUCT_WINDOW_DAYS * DAY && a.time <= now - settle);
+      const dates = prod[kind][c.path] || [];
+      const n = eligible.filter((a) => dates.some((d) => Math.abs(d - a.time) < 3600e3)).length;
+      const pct = eligible.length ? Math.round((100 * n) / eligible.length) : null;
+      rows.push({ label, pct });
+      if (!dates.length) {
+        const cell = card.querySelector(`[data-s1="${kind}"]`);
+        if (cell) cell.innerHTML = `<span class="sub">Not produced here in the last ${PRODUCT_WINDOW_DAYS} days</span>`;
+      }
+    }
+    const operaCell = card.querySelector('[data-s1="opera"]');
+    if (!operaCell) return;
+    operaCell.innerHTML = `
+      <div class="freq">${rows.map((r) => r.pct === null
+        ? `<span class="k">${r.label}</span><span class="sub" style="grid-column: span 2">no acquisitions old enough yet</span>`
+        : `<span class="k">${r.label}</span><span class="bar"><span style="width:${r.pct}%"></span></span><span class="pct">${r.pct}%</span>`).join("")}</div>
+      <div class="sub" style="margin-top:6px">Share of SLC acquisitions with OPERA RTC / CSLC</div>`;
+  }), failed("opera"));
+
+  disp.then((list) => each((c, card) => {
+    const d = dispForTrack(list, c);
+    const cell = card.querySelector('[data-s1="disp"]');
+    cell.textContent = d ? `latest through ${fmtDate(d, zone)}` : "none";
+    cell.classList.remove("loading");
+  }), failed("disp"));
+
+  aria.then((byTrack) => each((c, card) => {
+    const t = byTrack[`${c.path}_${c.dir}`];
+    const cell = card.querySelector('[data-s1="gunw"]');
+    cell.textContent = t ? `latest ${fmtDate(t, zone)}` : "none";
+    cell.classList.remove("loading");
+    const note = card.querySelector('[data-s1="aria"]');
+    if (note && t) note.innerHTML = `<br><span class="sub">ARIA GUNW interferograms exist for this track (latest ${fmtDate(t, zone)})</span>`;
+  }), failed("gunw"));
 }
 
 function setupPager() {
