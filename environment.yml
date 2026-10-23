@@ -1,0 +1,11 @@
+name: whensar
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - asf_search
+  - geopandas
+  - pyogrio
+  - shapely
+  - requests
+  - pytest
