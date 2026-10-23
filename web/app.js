@@ -2,7 +2,7 @@ import { framesAt } from "./lib/plan.js";
 import { framePasses, nextIndex, countdown } from "./lib/passes.js";
 import { describeMode, describeFileMode, planBandwidths, fileBandwidths, sameBandwidths } from "./lib/modes.js";
 import { zoneAt, fmtLocal, fmtDate, fmtUTC, fmtRange } from "./lib/timefmt.js";
-import { frameHistory, frameProducts, vertexLink, PRODUCTS } from "./lib/history.js";
+import { acquisitions, productDates, browseURL, vertexLink, PRODUCTS } from "./lib/history.js";
 
 const HOUR = 3600e3;
 const DAY = 24 * HOUR;
@@ -13,7 +13,7 @@ const DEFAULT_LATENCY = { source: "ASF typical", RSLC: { p50: 48, p90: 72 }, GCO
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
-const state = { marker: null, cards: [], controller: null, point: null };
+const state = { marker: null, cards: [], point: null };
 
 // Urgent Response timing is opt-in; the standard products stay the main estimate.
 const UR_KEY = "whensar.showUrgent";
@@ -47,10 +47,71 @@ const mapReady = new Promise((resolve) => map.on("load", resolve)).then(() => {
     paint: { "line-color": color, "line-width": ["case", selected, 2.5, 1], "line-opacity": ["case", selected, 1, 0.6] } });
 });
 
-const fromHash = location.hash.match(/^#(-?[\d.]+),(-?[\d.]+)$/);
-if (fromHash) select(+fromHash[2], +fromHash[1], true);
+// Browser history: the first selection pushes an entry so Back clears it instead of leaving
+// the site; later selections replace it. A shared link gets the same treatment.
+const parseHash = () => location.hash.match(/^#(-?[\d.]+),(-?[\d.]+)$/);
+const fromHash = parseHash();
+if (fromHash) {
+  history.replaceState(null, "", location.pathname);
+  select(+fromHash[2], +fromHash[1], true);
+}
+window.addEventListener("popstate", () => {
+  const h = parseHash();
+  if (h) {
+    history.replaceState({ selected: true }, "", location.hash);
+    select(+h[2], +h[1], true, false);
+  } else clearSelection();
+});
 
 map.on("click", (e) => select(e.lngLat.lng, e.lngLat.lat));
+$("close").addEventListener("click", () => {
+  if (history.state?.selected && history.length > 1) history.back();
+  else {
+    history.replaceState(null, "", location.pathname);
+    clearSelection();
+  }
+});
+
+// Phone bottom sheet: swipe down (or tap the handle) to collapse, swipe up to expand
+const isPhone = () => window.matchMedia("(max-width: 640px)").matches;
+function setCollapsed(on) {
+  $("panel").classList.toggle("collapsed", on);
+  if (on) document.querySelectorAll(".card").forEach((card) => (card.scrollTop = 0));
+}
+$("grabber").addEventListener("click", () => setCollapsed(!$("panel").classList.contains("collapsed")));
+$("panel-head").addEventListener("click", (e) => {
+  if (!e.target.closest("button") && $("panel").classList.contains("collapsed")) setCollapsed(false);
+});
+(() => {
+  let start = null;
+  $("panel").addEventListener("touchstart", (e) => {
+    if (!isPhone()) return;
+    const t = e.touches[0];
+    const card = e.target.closest(".card");
+    // Swipes inside a card only count when it is scrolled to the top
+    start = { x: t.clientX, y: t.clientY, atTop: !card || card.scrollTop <= 0 };
+  }, { passive: true });
+  $("panel").addEventListener("touchend", (e) => {
+    if (!start) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - start.x, dy = t.clientY - start.y;
+    const collapsed = $("panel").classList.contains("collapsed");
+    if (Math.abs(dy) > 50 && Math.abs(dy) > 1.5 * Math.abs(dx)) {
+      if (dy > 0 && start.atTop && !collapsed) setCollapsed(true);
+      else if (dy < 0 && collapsed) setCollapsed(false);
+    }
+    start = null;
+  }, { passive: true });
+})();
+
+function clearSelection() {
+  state.marker?.remove();
+  state.marker = null;
+  state.cards = [];
+  $("panel").hidden = true;
+  $("hint").hidden = false;
+  map.getSource("frames")?.setData({ type: "FeatureCollection", features: [] });
+}
 
 $("locate").addEventListener("click", () => {
   navigator.geolocation?.getCurrentPosition(
@@ -60,11 +121,13 @@ $("locate").addEventListener("click", () => {
   );
 });
 
-async function select(lon, lat, fly = false) {
+async function select(lon, lat, fly = false, updateHistory = true) {
   lon = ((((lon + 180) % 360) + 360) % 360) - 180;
-  history.replaceState(null, "", `#${lat.toFixed(4)},${lon.toFixed(4)}`);
-  state.controller?.abort();
-  state.controller = new AbortController();
+  if (updateHistory) {
+    const url = `#${lat.toFixed(4)},${lon.toFixed(4)}`;
+    if (history.state?.selected) history.replaceState({ selected: true }, "", url);
+    else history.pushState({ selected: true }, "", url);
+  }
 
   state.marker?.remove();
   state.marker = new maplibregl.Marker({ color: "#16181d" }).setLngLat([lon, lat]).addTo(map);
@@ -82,7 +145,10 @@ async function select(lon, lat, fly = false) {
       const passes = framePasses(f.properties);
       const i = nextIndex(passes, now);
       const lastSeen = new Date(f.properties.ref_start);
+      const acq = acquisitions(f.properties);
       return {
+        acq,
+        prodDates: productDates(f.properties, acq),
         f, p: f.properties, passes, next: i >= 0 ? passes[i] : null, nextIdx: i,
         key: `${f.properties.track}_${f.properties.dir}_${f.properties.frame}`,
         lastSeen,
@@ -91,13 +157,10 @@ async function select(lon, lat, fly = false) {
     })
     // Frames acquired recently first (soonest pass on top), then dormant ones
     .sort((a, b) => b.active - a.active || (a.next?.time ?? Infinity) - (b.next?.time ?? Infinity));
+  state.cards.forEach((c) => (c.rates = productRates(c, latency, now)));
 
   render({ lon, lat, zone, modes, latency, meta });
   console.info(`plan lookup + render: ${(performance.now() - t0).toFixed(0)} ms, ${frames.length} frames`);
-  state.cards.forEach((c) => {
-    loadHistory(c, zone, state.controller.signal);
-    loadProducts(c, zone, latency, state.controller.signal);
-  });
 
   await mapReady;
   map.getSource("frames").setData({
@@ -116,13 +179,14 @@ async function select(lon, lat, fly = false) {
 }
 
 function panelPadding() {
-  return window.innerWidth <= 640
+  return isPhone()
     ? { top: 70, bottom: window.innerHeight * 0.62 + 20, left: 30, right: 30 }
     : { top: 70, bottom: 30, left: 420, right: 60 };
 }
 
 function render({ lon, lat, zone, modes, latency, meta }) {
   $("panel").hidden = false;
+  setCollapsed(false);
   $("where").textContent = `${lat.toFixed(3)}, ${lon.toFixed(3)} · ${zone}`;
   const cards = $("cards");
 
@@ -151,7 +215,7 @@ function cardHTML(c, zone, modes, latency, meta) {
       <div class="next-label">Next pass</div>
       <div class="next-time">Not in current plan</div>
       <div class="sub">Published plan ends ${esc(meta.plan_end)}; a new plan is expected before then.</div>
-      ${ids}${productsSection(c)}${historySection(c)}</section>`;
+      ${ids}${productsSection(c, zone)}${historySection(c, zone)}</section>`;
   }
 
   const t = next.time;
@@ -171,7 +235,11 @@ function cardHTML(c, zone, modes, latency, meta) {
   const produce = new Set(p.produce.split(","));
   const lat = (k) => latency[k] || DEFAULT_LATENCY[k];
   // Median to 90th-percentile processing time, shown as local clock times
-  const avail = (k) => fmtRange(new Date(+t + lat(k).p50 * HOUR), new Date(+t + lat(k).p90 * HOUR), zone);
+  // Availability estimates are moot for products this frame hasn't been getting
+  const avail = (k, product) =>
+    c.rates.byProduct[product] === 0
+      ? `<span class="sub">None produced here in the last ${PRODUCT_WINDOW_DAYS} days</span>`
+      : fmtRange(new Date(+t + lat(k).p50 * HOUR), new Date(+t + lat(k).p90 * HOUR), zone);
   // An interferogram needs a real earlier acquisition; pair with the latest one if it is recent
   const prev = t - c.lastSeen <= 25 * DAY ? { time: c.lastSeen } : null;
   const gunwPossible = produce.has("gunw") && prev;
@@ -185,92 +253,64 @@ function cardHTML(c, zone, modes, latency, meta) {
     <div class="section"><h3 class="h3-row">Expected data availability
       <label class="switch" title="Also show Urgent Response timing"><input type="checkbox" class="ur-toggle"><span class="track"></span>Urgent</label></h3>
       <div class="rows">
-      ${produce.has("gcov") || produce.has("gslc") ? `<span class="k">GCOV / GSLC</span><span data-prod="GCOV">${avail("GCOV")}</span>` : `<span class="k">RSLC</span><span data-prod="RSLC">${avail("RSLC")}</span>`}
-      ${gunwPossible ? `<span class="k">Interferogram</span><span data-prod="GUNW">${avail("GUNW")}<br><span class="sub">GUNW with ${fmtDate(prev.time, zone)} acquisition</span></span>` : ""}
-      ${latency.UR_GCOV?.p50 ? `<span class="k ur-row">Urgent GCOV</span><span class="ur-row">${avail("UR_GCOV")}</span>` : ""}
-      ${gunwPossible && latency.UR_GUNW?.p50 ? `<span class="k ur-row">Urgent GUNW</span><span class="ur-row">${avail("UR_GUNW")}</span>` : ""}
+      ${produce.has("gcov") || produce.has("gslc") ? `<span class="k">GCOV / GSLC</span><span>${avail("GCOV", "GCOV")}</span>` : `<span class="k">RSLC</span><span>${avail("RSLC", "RSLC")}</span>`}
+      ${gunwPossible ? `<span class="k">Interferogram</span><span>${avail("GUNW", "GUNW")}${c.rates.byProduct.GUNW === 0 ? "" : `<br><span class="sub">GUNW with ${fmtDate(prev.time, zone)} acquisition</span>`}</span>` : ""}
+      ${latency.UR_GCOV?.p50 ? `<span class="k ur-row">Urgent GCOV</span><span class="ur-row">${avail("UR_GCOV", "GCOV")}</span>` : ""}
+      ${gunwPossible && latency.UR_GUNW?.p50 ? `<span class="k ur-row">Urgent GUNW</span><span class="ur-row">${avail("UR_GUNW", "GUNW")}</span>` : ""}
     </div>
     <div class="sub ur-row" style="margin-top:4px">Urgent Response products appear only if triggered (e.g. by a USGS earthquake alert). They use a rapid orbit; the standard products above use the corrected orbit and remain the reference.</div>
     <div class="sub" style="margin-top:4px">Median–90th percentile of recent processing times (${esc(latency.source || "measured")})</div></div>
     <div class="section"><h3>Following passes</h3><div class="upcoming">${upcoming || '<span class="sub">none in current plan</span>'}</div></div>
-    ${productsSection(c)}
-    ${historySection(c)}
+    ${productsSection(c, zone)}
+    ${historySection(c, zone)}
   </section>`;
 }
 
-function historySection(c) {
-  return `<div class="section"><h3>History</h3><div class="history" id="hist-${c.key}"><span class="loading">loading…</span></div>
-    <div style="margin-top:6px"><a href="${vertexLink(c.p.track, c.p.frame, state.point.lon, state.point.lat)}" target="_blank" rel="noopener">Open in ASF Vertex ↗</a></div></div>`;
-}
-
-async function loadHistory(c, zone, signal) {
-  const el = () => document.getElementById(`hist-${c.key}`);
-  try {
-    const acq = await frameHistory(c.p.track, c.p.dir, c.p.frame, signal);
-    if (!el()) return;
-    if (!acq.length) {
-      el().innerHTML = `<span class="sub">No acquisitions in the public archive yet.</span>`;
-      return;
-    }
-    const since = acq[acq.length - 1].start;
-    const planned = c.passes.filter((q) => q.time >= since - 86400e3 && q.time <= Date.now() - 86400e3);
-    const got = planned.filter((q) => acq.some((a) => Math.abs(a.start - q.time) < 86400e3)).length;
-    const last = acq[0];
-    el().innerHTML = `
-      <div class="rows">
-        <span class="k">Last acquired</span><span>${fmtLocal(last.start, zone)}</span>
-        <span class="k">Mode</span><span>${esc(describeFileMode(last.mode, last.pol))}${last.fullFrame ? "" : " · partial frame"}</span>
-        <span class="k">Regularity</span><span>${got} of ${planned.length} planned passes since ${fmtDate(since, zone)}</span>
-      </div>
-      ${last.browse ? `<img class="browse" src="${esc(last.browse)}" alt="Latest browse image" loading="lazy">` : ""}
-      <div class="upcoming" style="margin-top:6px">${acq.slice(0, 8).map((a) => `<span class="chip" title="${esc(describeFileMode(a.mode, a.pol))}">${fmtDate(a.start, zone)}</span>`).join("")}</div>`;
-  } catch (e) {
-    if (e.name !== "AbortError" && el()) el().innerHTML = `<span class="sub">History unavailable (${esc(e.message)})</span>`;
-  }
-}
-
-function productsSection(c) {
-  return `<div class="section"><h3>Products · last ${PRODUCT_WINDOW_DAYS} days</h3><div id="prod-${c.key}"><span class="loading">loading…</span></div></div>`;
+function historySection(c, zone) {
+  const acq = c.acq;
+  const vertex = `<div style="margin-top:6px"><a href="${vertexLink(c.p.track, c.p.frame, state.point.lon, state.point.lat)}" target="_blank" rel="noopener">Open in ASF Vertex ↗</a></div>`;
+  if (!acq.length) return `<div class="section"><h3>History</h3><span class="sub">No acquisitions in the public archive yet.</span>${vertex}</div>`;
+  const since = acq.at(-1).start;
+  const planned = c.passes.filter((q) => q.time >= since - DAY && q.time <= Date.now() - DAY);
+  const got = planned.filter((q) => acq.some((a) => Math.abs(a.start - q.time) < DAY)).length;
+  const last = acq[0];
+  return `<div class="section"><h3>History</h3>
+    <div class="rows">
+      <span class="k">Last acquired</span><span>${fmtLocal(last.start, zone)}</span>
+      <span class="k">Mode</span><span>${esc(describeFileMode(last.mode, last.pol))}${last.fullFrame ? "" : " · partial frame"}</span>
+      <span class="k">Regularity</span><span>${got} of ${planned.length} planned passes since ${fmtDate(since, zone)}</span>
+    </div>
+    ${c.p.latest_rslc ? `<img class="browse" src="${esc(browseURL(c.p.latest_rslc))}" alt="Latest browse image" loading="lazy">` : ""}
+    <div class="upcoming" style="margin-top:6px">${acq.slice(0, 8).map((a) => `<span class="chip" title="${esc(describeFileMode(a.mode, a.pol))}">${fmtDate(a.start, zone)}</span>`).join("")}</div>
+    ${vertex}</div>`;
 }
 
 // Share of planned passes in the window that produced each product. The window ends one
 // slow (90th percentile) processing time ago so passes still in processing don't count as missing.
-async function loadProducts(c, zone, latency, signal) {
-  const el = () => document.getElementById(`prod-${c.key}`);
+function productRates(c, latency, now) {
   const settle = ((latency.GCOV || DEFAULT_LATENCY.GCOV).p90 + 12) * HOUR;
-  const since = new Date(Date.now() - PRODUCT_WINDOW_DAYS * DAY);
-  const until = new Date(Date.now() - settle);
-  try {
-    const products = await frameProducts(c.p.track, c.p.dir, c.p.frame, since, signal);
-    if (!el()) return;
-    const planned = c.passes.filter((q) => q.time >= since && q.time <= until);
-    if (!planned.length) {
-      el().innerHTML = `<span class="sub">No planned passes in this period.</span>`;
-      return;
-    }
-    const rows = Object.keys(PRODUCTS).map((name) => {
-      const n = planned.filter((q) => products.some((g) => g.product === name && Math.abs(g.time - q.time) < DAY)).length;
-      return { name, pct: Math.round((100 * n) / planned.length) };
-    });
-    // Availability estimates are moot for products this frame hasn't been getting
-    document.querySelectorAll(`.card[data-key="${c.key}"] [data-prod]`).forEach((cell) => {
-      if (rows.find((r) => r.name === cell.dataset.prod)?.pct === 0) {
-        cell.innerHTML = `<span class="sub">None produced here in the last ${PRODUCT_WINDOW_DAYS} days</span>`;
-      }
-    });
-    const made = rows.filter((r) => r.pct > 0);
-    const none = rows.filter((r) => r.pct === 0).map((r) => r.name);
-    if (!made.length) {
-      el().innerHTML = `<span class="sub">No products from the ${planned.length} planned passes, ${fmtDate(planned[0].time, zone)} – ${fmtDate(planned.at(-1).time, zone)}.</span>`;
-      return;
-    }
-    el().innerHTML = `
-      <div class="sub" style="margin-bottom:6px">Share of ${planned.length} planned passes, ${fmtDate(planned[0].time, zone)} – ${fmtDate(planned.at(-1).time, zone)}</div>
-      ${made.length ? `<div class="freq">${made.map((r) => `<span class="k">${r.name}</span><span class="bar"><span style="width:${r.pct}%"></span></span><span class="pct">${r.pct}%</span>`).join("")}</div>` : ""}
-      ${none.length ? `<div class="sub" style="margin-top:6px">None: ${none.join(", ")}</div>` : ""}`;
-  } catch (e) {
-    if (e.name !== "AbortError" && el()) el().innerHTML = `<span class="sub">Products unavailable (${esc(e.message)})</span>`;
+  const planned = c.passes.filter((q) => q.time >= now - PRODUCT_WINDOW_DAYS * DAY && q.time <= now - settle);
+  const byProduct = {};
+  for (const name of PRODUCTS) {
+    const dates = c.prodDates[name] || [];
+    const n = planned.filter((q) => dates.some((d) => Math.abs(d - q.time) < DAY)).length;
+    byProduct[name] = planned.length ? Math.round((100 * n) / planned.length) : null;
   }
+  return { planned, byProduct };
+}
+
+function productsSection(c, zone) {
+  const { planned, byProduct } = c.rates;
+  const head = `<div class="section"><h3>Products · last ${PRODUCT_WINDOW_DAYS} days</h3>`;
+  if (!planned.length) return `${head}<span class="sub">No planned passes in this period.</span></div>`;
+  const span = `${planned.length} planned passes, ${fmtDate(planned[0].time, zone)} – ${fmtDate(planned.at(-1).time, zone)}`;
+  const made = PRODUCTS.filter((p) => byProduct[p] > 0);
+  const none = PRODUCTS.filter((p) => byProduct[p] === 0);
+  if (!made.length) return `${head}<span class="sub">No products from the ${span}.</span></div>`;
+  return `${head}
+    <div class="sub" style="margin-bottom:6px">Share of ${span}</div>
+    <div class="freq">${made.map((p) => `<span class="k">${p}</span><span class="bar"><span style="width:${byProduct[p]}%"></span></span><span class="pct">${byProduct[p]}%</span>`).join("")}</div>
+    ${none.length ? `<div class="sub" style="margin-top:6px">None: ${none.join(", ")}</div>` : ""}</div>`;
 }
 
 function setupPager() {

@@ -39,4 +39,5 @@ def parse(name):
         if d.get(k) is not None:
             d[k] = _dt(d[k])
     d["full_frame"] = d["coverage"] == "F"
+    d["name"] = name
     return d

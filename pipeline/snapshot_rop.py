@@ -17,7 +17,7 @@ from pathlib import Path
 import geopandas as gpd
 import requests
 
-from frame_times import CACHE as FRAME_TIMES, frame_key
+from granule_index import CACHE as GRANULE_INDEX, frame_key, frame_summary
 
 ROP_LAYER = (
     "https://services7.arcgis.com/WSiUmUhlFx4CtMBB/arcgis/rest/services/"
@@ -97,11 +97,11 @@ def mode_table(features):
     return table
 
 
-def normalize(feature, frame_times):
+def normalize(feature, index):
     p = feature["properties"]
     passes = parse_date_modes(p["date_mode_popup"])
     direction = p["passdirection"][0].upper()  # 'A' or 'D'
-    seen = frame_times.get(frame_key(int(p["track"]), direction, int(p["frame"]))) or {}
+    seen = index.get(frame_key(int(p["track"]), direction, int(p["frame"]))) or {}
     return {
         "mission": "NISAR",
         "track": int(p["track"]),
@@ -111,10 +111,8 @@ def normalize(feature, frame_times):
         "passes": json.dumps(passes, separators=(",", ":")),
         "produce": ",".join(k for k in PRODUCTS if str(p.get(f"produce{k}")) == "1"),
         "plan_end": passes[-1][0] if passes else None,
-        # Most recent actual acquisition of this frame (see frame_times.py); None if never seen
-        "ref_start": seen.get("start"),
-        "last_mode": seen.get("mode"),  # filename codes, e.g. "4005" / "DHDH"
-        "last_pol": seen.get("pol"),
+        # Actual acquisitions and products (see granule_index.py); ref_start is None if never acquired
+        **frame_summary(seen),
         "geometry": feature["geometry"],
     }
 
@@ -127,10 +125,10 @@ def main():
     session = requests.Session()
     info = layer_info(session)
     raw = fetch_features(session)
-    frame_times = json.loads(FRAME_TIMES.read_text()) if FRAME_TIMES.exists() else {}
-    if not frame_times:
-        sys.exit(f"{FRAME_TIMES} missing or empty; run frame_times.py first")
-    rows = [normalize(f, frame_times) for f in raw if f.get("geometry")]
+    cache = json.loads(GRANULE_INDEX.read_text()) if GRANULE_INDEX.exists() else {}
+    if not cache.get("frames"):
+        sys.exit(f"{GRANULE_INDEX} missing or empty; run granule_index.py first")
+    rows = [normalize(f, cache["frames"]) for f in raw if f.get("geometry")]
     if len(rows) < 10000:
         sys.exit(f"Only {len(rows)} ROP frames fetched; refusing to overwrite snapshot")
     # Planned frames that have never produced data stay off the map
@@ -149,6 +147,7 @@ def main():
             info["editingInfo"]["lastEditDate"] / 1000, timezone.utc
         ).isoformat(),
         "snapshot_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "data_through": cache["updated_through"],
         "frames_planned": planned,
         "frames_with_data": len(gdf),
         "plan_end": max(gdf["plan_end"].dropna()),

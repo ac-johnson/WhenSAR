@@ -15,7 +15,7 @@ Status: early development.
 ```bash
 mamba env create -f environment.yml
 conda activate whensar
-python pipeline/frame_times.py         # actual frame start times + flown modes (CMR, ~3 min)
+python pipeline/granule_index.py       # per-frame acquisitions + products (CMR; first run ~20 min, then ~1 min)
 python pipeline/snapshot_rop.py        # plan snapshot -> web/data/nisar_plan.fgb
 python pipeline/latency_stats.py       # measured product latency (ASF, ~4 min)
 python serve.py 8000                   # open http://localhost:8000
@@ -41,7 +41,8 @@ HTTP range requests. `python tests/browser_smoke.py` screenshots a few test poin
 
 ## Data sources (all public, no login)
 - NISAR Reference Observation Plan (ASF ArcGIS feature service)
-- NASA CMR for acquisition history and frame start times
+- NASA CMR for acquisition history, frame start times and product frequency, precomputed
+  every 6 hours so the app makes no live catalog queries
 - ASF SearchAPI for processing dates (latency)
 
 No credentials are needed to run the app. Never commit credentials; this repo uses
