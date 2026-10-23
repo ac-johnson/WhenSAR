@@ -15,13 +15,29 @@ Status: early development.
 ```bash
 mamba env create -f environment.yml
 conda activate whensar
-python pipeline/snapshot_rop.py        # writes web/data/nisar_plan.fgb
-python -m http.server -d web 8000      # open http://localhost:8000
+python pipeline/frame_times.py         # actual frame start times + flown modes (CMR, ~3 min)
+python pipeline/snapshot_rop.py        # plan snapshot -> web/data/nisar_plan.fgb
+python pipeline/latency_stats.py       # measured product latency (ASF, ~4 min)
+python serve.py 8000                   # open http://localhost:8000
 ```
+`serve.py` is used instead of `python -m http.server` because the plan file is read with
+HTTP range requests. `python tests/browser_smoke.py` screenshots a few test points
+(needs `pip install playwright` and Chrome).
 
-## Data sources
+## How "next pass" is computed
+- Planned dates and modes come from the NISAR Reference Observation Plan.
+- The plan's time is the *datatake* start, shared by every frame in it. The exact frame
+  time comes from the frame's most recent real acquisition + N × 12 days (exact repeat
+  orbit, ~1 s). Frames never acquired yet show the datatake time, marked "approx."
+- The published plan's mode can differ from what is actually flown (~6% of frames,
+  mostly 77 MHz planned vs 40+5 MHz flown); the card notes this when it happens.
+- Product availability = pass time + measured median latency (nightly sample of ASF
+  processing dates), including Urgent Response products.
+
+## Data sources (all public, no login)
 - NISAR Reference Observation Plan (ASF ArcGIS feature service)
-- ASF SearchAPI for past acquisitions (no login required)
+- NASA CMR for acquisition history and frame start times
+- ASF SearchAPI for processing dates (latency)
 
 No credentials are needed to run the app. Never commit credentials; this repo uses
 [git-secrets](https://github.com/awslabs/git-secrets) hooks.
