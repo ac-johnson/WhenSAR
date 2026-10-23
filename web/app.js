@@ -4,7 +4,7 @@ import { describeMode, describeFileMode, planBandwidths, fileBandwidths, sameBan
 import { zoneAt, fmtLocal, fmtDate, fmtUTC, fmtRange } from "./lib/timefmt.js";
 import { acquisitions, productDates, browseURL, vertexLink, PRODUCTS } from "./lib/history.js";
 import { loadSites, findSite, siteData, saveSite, refreshSite, removeSite } from "./lib/sites.js";
-import { buildTracks, s1Products, dispForTrack, describePol, s1VertexLink, HYP3_URL } from "./lib/s1.js";
+import { buildTracks, s1Products, dispForTrack, describePol, s1VertexLink, s1Repeat, expectedSlots, productShare, HYP3_URL } from "./lib/s1.js";
 import { featuresAt } from "./lib/plan.js";
 import { createPolarMap } from "./lib/polarmap.js";
 
@@ -15,7 +15,7 @@ const PRODUCT_WINDOW_DAYS = 90;
 const DEFAULT_LATENCY = {
   source: "ASF typical",
   L0B: { p50: 6, p90: 10 }, RSLC: { p50: 48, p90: 72 }, GCOV: { p50: 48, p90: 72 }, GUNW: { p50: 54, p90: 80 },
-  S1_SLC: { p50: 10, p90: 24 }, S1_RTC: { p50: 12, p90: 48 }, S1_CSLC: { p50: 24, p90: 72 },
+  S1_SLC: { p50: 10, p90: 24 }, S1_GRD: { p50: 6, p90: 24 }, S1_RTC: { p50: 12, p90: 48 }, S1_CSLC: { p50: 24, p90: 72 },
 };
 const MISSIONS = { nisar: "NISAR", s1: "Sentinel-1" };
 const S1_MODES = { IW: "Interferometric Wide swath", EW: "Extra Wide swath", SM: "Stripmap" };
@@ -544,12 +544,14 @@ const satName = (sat) => `Sentinel-1${sat.slice(-1)}`;
 function s1CardHTML(c, zone, latency, s1Meta) {
   const dirName = c.dir === "A" ? "Ascending" : "Descending";
   const lat = (k) => latency[k] || DEFAULT_LATENCY[k];
-  const ids = (sat) => `<div class="frame-id"><span class="chip">Path ${c.path}</span><span class="chip ${c.dir === "A" ? "asc" : "desc"}">${dirName}</span>${sat ? `<span class="chip">${satName(sat)}</span>` : ""}</div>`;
+  const repeat = s1Repeat(c);
+  const repeatChip = `<span class="chip" title="Covered by ${repeat.sats.map(satName).join(" and ")}">Repeat ${repeat.days} days</span>`;
+  const ids = (sat) => `<div class="frame-id"><span class="chip">Path ${c.path}</span><span class="chip ${c.dir === "A" ? "asc" : "desc"}">${dirName}</span>${sat ? `<span class="chip">${satName(sat)}</span>` : ""}${repeatChip}</div>`;
   const next = c.next;
   if (!next) {
     return `<section class="card" data-key="${c.key}">
       <div class="next-label">Next pass</div><div class="next-time">Not in ESA's current plan</div>
-      ${ids()}${s1ProductsSection(c, zone)}${s1HistorySection(c, zone)}</section>`;
+      ${ids()}${s1ProductsSection(c, zone, latency)}${s1HistorySection(c, zone)}</section>`;
   }
   const t = next.time;
   const win = (k) => fmtRange(new Date(+t + lat(k).p50 * HOUR), new Date(+t + lat(k).p90 * HOUR), zone);
@@ -563,7 +565,8 @@ function s1CardHTML(c, zone, latency, s1Meta) {
     <div class="section"><h3>${next.projected ? "Expected" : "Planned"} mode</h3>
       <div>${esc(next.mode)} (${esc(S1_MODES[next.mode] || next.mode)}), ${esc(describePol(next.pol))}</div></div>
     <div class="section"><h3>Expected data availability</h3><div class="rows">
-      <span class="k">SLC / bursts</span><span>${win("S1_SLC")}</span>
+      <span class="k">SLC / bursts</span><span data-s1="slc">${win("S1_SLC")}</span>
+      <span class="k">GRD</span><span data-s1="grd">${win("S1_GRD")}</span>
       <span class="k">OPERA RTC</span><span data-s1="rtc">${win("S1_RTC")}</span>
       <span class="k">OPERA CSLC</span><span data-s1="cslc">${win("S1_CSLC")}</span>
       <span class="k">Interferogram</span><span>Once the SLC is available, process one on demand with
@@ -572,24 +575,38 @@ function s1CardHTML(c, zone, latency, s1Meta) {
     <div class="section"><h3>Following passes</h3><div class="upcoming">${following.map((q) =>
       `<span class="chip${q.projected ? " projected" : ""}" title="${satName(q.sat)}${q.projected ? ", projected beyond ESA's plan" : ""}">${fmtDate(q.time, zone)} · ${q.sat.slice(-1)}</span>`).join("") || '<span class="sub">none in current plan</span>'}</div>
       <div class="sub" style="margin-top:4px">C / D: Sentinel-1C / 1D${following.some((q) => q.projected) ? "; dashed: projected beyond ESA's plan" : ""}</div></div>
-    ${s1ProductsSection(c, zone)}
+    ${s1ProductsSection(c, zone, latency)}
     ${s1HistorySection(c, zone)}
   </section>`;
 }
 
-function s1ProductsSection(c, zone) {
-  const recent = c.acq.filter((a) => a.time >= Date.now() - PRODUCT_WINDOW_DAYS * DAY);
-  const gaps = recent.slice(1).map((a, i) => (recent[i].time - a.time) / DAY).sort((a, b) => a - b);
-  const every = gaps.length ? Math.round(gaps[Math.floor(gaps.length / 2)]) : null;
-  return `<div class="section"><h3>Products · last ${PRODUCT_WINDOW_DAYS} days</h3>
-    <div class="sub" style="margin-bottom:6px">${recent.length
-      ? `SLC: ${recent.length} acquisitions${every ? `, about every ${every} days` : ""}`
-      : "No SLC acquisitions here in this period (track is in ESA's plan)"}</div>
-    ${recent.length ? '<div data-s1="opera"><span class="loading">loading OPERA…</span></div>' : ""}
-    <div class="rows" style="margin-top:6px">
+// Expected passes for the products window. The window ends one slow processing time ago
+// (the slowest of the products shown) so passes still in processing don't count as missing.
+function s1Slots(c, latency, now) {
+  const p90 = (k) => (latency[k] || DEFAULT_LATENCY[k]).p90;
+  const settle = Math.max(p90("S1_SLC"), p90("S1_GRD"), p90("S1_RTC"), p90("S1_CSLC")) * HOUR + 12 * HOUR;
+  return expectedSlots(c, now, PRODUCT_WINDOW_DAYS, settle);
+}
+
+const bar = (label, pct) =>
+  `<span class="k">${label}</span><span class="bar"><span style="width:${pct}%"></span></span><span class="pct">${pct}%</span>`;
+
+function s1ProductsSection(c, zone, latency) {
+  const slots = (c.slots = s1Slots(c, latency, Date.now()));
+  const got = slots.filter((x) => x.acquired).length;
+  const head = `<div class="section"><h3>Products · last ${PRODUCT_WINDOW_DAYS} days</h3>`;
+  const tail = `<div class="rows" style="margin-top:6px">
       <span class="k">OPERA DISP</span><span data-s1="disp" class="loading">loading…</span>
-      <span class="k">ARIA GUNW</span><span data-s1="gunw" class="loading">loading…</span>
-    </div></div>`;
+      <span class="k">ARIA GUNW</span><span data-s1="gunw" class="loading">loading…</span></div></div>`;
+  if (!slots.length || !got) {
+    return `${head}<div class="sub" style="margin-bottom:6px">No acquisitions here in this period${c.passes.length ? " (track is in ESA's plan)" : ""}</div>${tail}`;
+  }
+  const pct = Math.round((100 * got) / slots.length);
+  return `${head}
+    <div class="sub" style="margin-bottom:6px">Share of ${slots.length} expected passes (every ${s1Repeat(c).days} days), ${fmtDate(slots[0].time, zone)} – ${fmtDate(slots.at(-1).time, zone)}</div>
+    <div class="freq">${bar("Acquired", pct)}</div>
+    <div class="freq" data-s1="products" style="margin-top:4px"><span class="loading" style="grid-column: span 3">loading products…</span></div>
+    ${tail}`;
 }
 
 function s1HistorySection(c, zone) {
@@ -625,28 +642,23 @@ function fillS1Products(lon, lat, zone, latency, now, signal) {
   };
 
   opera.then((prod) => each((c, card) => {
-    const rows = [];
-    for (const [kind, label] of [["rtc", "RTC"], ["cslc", "CSLC"]]) {
-      // Share of SLC acquisitions old enough to have been processed that have this product
-      const settle = (latency[`S1_${label}`] || DEFAULT_LATENCY[`S1_${label}`]).p90 * HOUR + 12 * HOUR;
-      const eligible = c.acq.filter((a) => a.time >= now - PRODUCT_WINDOW_DAYS * DAY && a.time <= now - settle);
-      const dates = prod[kind][c.path] || [];
-      const n = eligible.filter((a) => dates.some((d) => Math.abs(d - a.time) < 3600e3)).length;
-      const pct = eligible.length ? Math.round((100 * n) / eligible.length) : null;
-      rows.push({ label, pct });
-      if (!dates.length) {
+    const slots = c.slots || [];
+    const kinds = [["slc", "SLC"], ["grd", "GRD"], ["rtc", "RTC"], ["cslc", "CSLC"]];
+    const shares = kinds.map(([kind, label]) => [kind, label, productShare(slots, prod[kind], c.path)]);
+    for (const [kind, , share] of shares) {
+      // Availability estimates are moot for products this track hasn't been getting
+      if (share === 0) {
         const cell = card.querySelector(`[data-s1="${kind}"]`);
         if (cell) cell.innerHTML = `<span class="sub">Not produced here in the last ${PRODUCT_WINDOW_DAYS} days</span>`;
       }
     }
-    const operaCell = card.querySelector('[data-s1="opera"]');
-    if (!operaCell) return;
-    operaCell.innerHTML = `
-      <div class="freq">${rows.map((r) => r.pct === null
-        ? `<span class="k">${r.label}</span><span class="sub" style="grid-column: span 2">no acquisitions old enough yet</span>`
-        : `<span class="k">${r.label}</span><span class="bar"><span style="width:${r.pct}%"></span></span><span class="pct">${r.pct}%</span>`).join("")}</div>
-      <div class="sub" style="margin-top:6px">Share of SLC acquisitions with OPERA RTC / CSLC</div>`;
-  }), failed("opera"));
+    const el = card.querySelector('[data-s1="products"]');
+    if (!el) return;
+    const made = shares.filter(([, , v]) => v > 0);
+    const none = shares.filter(([, , v]) => v === 0).map(([, label]) => label);
+    el.outerHTML = `<div class="freq" style="margin-top:4px">${made.map(([, label, v]) => bar(label, v)).join("")}</div>
+      ${none.length ? `<div class="sub" style="margin-top:6px">None: ${none.join(", ")}</div>` : ""}`;
+  }), failed("products"));
 
   disp.then((list) => each((c, card) => {
     const d = dispForTrack(list, c);

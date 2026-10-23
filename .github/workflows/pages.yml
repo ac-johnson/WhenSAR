@@ -35,7 +35,7 @@ jobs:
         with:
           path: pipeline/cache
           # NISAR granule index + Sentinel-1 scene index. A cache miss triggers one-time
-          # backfills (~20 + ~30 min); later runs are incremental
+          # backfills (~20 + ~25 min); later runs are incremental
           key: granule-index-v1-${{ github.run_id }}
           restore-keys: granule-index-v1-
 

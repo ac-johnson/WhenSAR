@@ -20,6 +20,8 @@ CMR_UMM = "https://cmr.earthdata.nasa.gov/search/granules.umm_json"
 # Sentinel-1 products: ASF's processingDate is the acquisition time, so use CMR insert dates
 S1_COLLECTIONS = {
     "S1_SLC": ["C3470873558-ASF", "C4175278193-ASF"],  # SENTINEL-1C_SLC, SENTINEL-1D_SLC
+    # SENTINEL-1C/1D_DP_GRD_HIGH and _MEDIUM (medium resolution: Extra Wide swath, e.g. sea ice)
+    "S1_GRD": ["C3486566209-ASF", "C4163054563-ASF", "C3486605959-ASF", "C4174076966-ASF"],
     "S1_RTC": ["C2777436413-ASF"],  # OPERA_L2_RTC-S1_V1
     "S1_CSLC": ["C2777443834-ASF"],  # OPERA_L2_CSLC-S1_V1
 }

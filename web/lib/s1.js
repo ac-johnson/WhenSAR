@@ -13,6 +13,10 @@ const PROJECT_DAYS = 90; // beyond ESA's ~3-week plan, assume each satellite kee
 
 const CMR_XML = "https://cmr.earthdata.nasa.gov/search/granules.xml";
 const OPERA = { RTC: "C2777436413-ASF", CSLC: "C2777443834-ASF" };
+// ESA products at ASF: SLC, and GRD (dual/single-pol, high/medium resolution) for both satellites
+const SLC = ["C3470873558-ASF", "C4175278193-ASF"];
+const GRD = ["C3486566209-ASF", "C4163054563-ASF", "C3486605959-ASF", "C4174076966-ASF",
+  "C3488402208-ASF", "C4174044457-ASF", "C3488414315-ASF", "C4175200051-ASF"];
 const DISP = "C3294057315-ASF";
 const ARIA_GUNW = "C2859376221-ASF";
 
@@ -60,7 +64,10 @@ export function buildTracks(plan, scenes, meta, lon, lat, now = Date.now()) {
     if (!t.acq.some((a) => a.sat === p.sat && Math.abs(a.time - time) < 10 * 60e3)) {
       t.acq.push({ time, sat: p.sat, mode: p.mode, pol: p.pol });
     }
-    if (!t.footprint || Date.parse(p.start) > Date.parse(t.footprint.properties.start)) t.footprint = f;
+    // Map footprint: the latest scene, preferring SLC/GRD (ASF's RAW footprints are narrower than the swath)
+    const rank = (x) => [x.properties.product !== "RAW", Date.parse(x.properties.start)];
+    const better = (a, b) => { const [ra, rb] = [rank(a), rank(b)]; return ra[0] !== rb[0] ? ra[0] : ra[1] > rb[1]; };
+    if (!t.footprint || better(f, t.footprint)) t.footprint = f;
   }
 
   for (const t of tracks.values()) {
@@ -111,15 +118,19 @@ const minuteOfDay = (d) => d.getUTCHours() * 60 + d.getUTCMinutes();
 export function s1Products(lon, lat, since, signal) {
   const point = `${lon.toFixed(5)},${lat.toFixed(5)}`;
   const recent = new URLSearchParams({ point, temporal: `${since.toISOString().slice(0, 19)}Z,`, page_size: "2000" });
-  Object.values(OPERA).forEach((c) => recent.append("collection_concept_id", c));
+  [...Object.values(OPERA), ...SLC, ...GRD].forEach((c) => recent.append("collection_concept_id", c));
   const latest = (c) => new URLSearchParams({ collection_concept_id: c, point, page_size: "200", sort_key: "-end_date" });
 
+  // {rtc: [{track, time}], cslc: [...], slc: [{sat, time}], grd: [...]}
   const opera = cmrNames(recent, signal).then((names) => {
-    const out = { rtc: {}, cslc: {} };
+    const out = { rtc: [], cslc: [], slc: [], grd: [] };
     for (const name of names) {
       // OPERA_L2_RTC-S1_T071-151229-IW2_20261020T135150Z_...
-      const m = name.match(/^OPERA_L2_(RTC|CSLC)-S1_T(\d{3})-\d+-\w+?_(\d{8}T\d{6})Z/);
-      if (m) (out[m[1].toLowerCase()][+m[2]] ??= []).push(ts(m[3]));
+      let m = name.match(/^OPERA_L2_(RTC|CSLC)-S1_T(\d{3})-\d+-\w+?_(\d{8}T\d{6})Z/);
+      if (m) { out[m[1].toLowerCase()].push({ track: +m[2], time: ts(m[3]) }); continue; }
+      // S1C_IW_SLC__1SDV_20261020T135136_... / S1D_EW_GRDM_1SDH_20261018T162518_...
+      m = name.match(/^(S1[A-D])_\w\w_(SLC_|GRD\w)_\w{4}_(\d{8}T\d{6})/);
+      if (m) out[m[2].startsWith("SLC") ? "slc" : "grd"].push({ sat: m[1], time: ts(m[3]) });
     }
     return out;
   });
@@ -165,3 +176,36 @@ export function s1VertexLink(path, lon, lat) {
 }
 
 export const HYP3_URL = "https://hyp3-docs.asf.alaska.edu/guides/insar_product_guide/";
+
+// Satellites covering this track (recent acquisitions or ESA's current plan) and the
+// resulting repeat: 6 days with both Sentinel-1C and 1D, 12 with one
+export function s1Repeat(track) {
+  const sats = [...new Set([...track.acq, ...track.passes.filter((q) => !q.projected)].map((q) => q.sat))].sort();
+  return { sats, days: sats.length >= 2 ? 6 : 12 };
+}
+
+// Passes expected over [now - days, now - settle]: each covering satellite passes every
+// 12 days on its own fixed schedule (anchored on any known pass time). Each slot records
+// whether an acquisition happened.
+export function expectedSlots(track, now, days, settle) {
+  const start = now - days * DAY, end = now - settle;
+  const slots = [];
+  for (const sat of s1Repeat(track).sats) {
+    const known = [...track.acq, ...track.passes].filter((q) => q.sat === sat);
+    if (!known.length) continue;
+    const anchor = +known[0].time;
+    for (let t = anchor + Math.ceil((start - anchor) / CYCLE) * CYCLE; t <= end; t += CYCLE) {
+      slots.push({ sat, time: new Date(t), acquired: track.acq.some((a) => a.sat === sat && Math.abs(a.time - t) < DAY) });
+    }
+  }
+  return slots.sort((a, b) => a.time - b.time);
+}
+
+// Share of expected slots that produced a product. Products are matched to a slot by time
+// (within 15 min), and by satellite (SLC/GRD) or track number (OPERA) when known.
+export function productShare(slots, granules, path) {
+  if (!slots.length) return null;
+  const n = slots.filter((s) => granules.some((g) =>
+    Math.abs(g.time - s.time) < 15 * 60e3 && (g.sat ? g.sat === s.sat : g.track === path))).length;
+  return Math.round((100 * n) / slots.length);
+}

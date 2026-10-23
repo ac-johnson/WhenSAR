@@ -18,7 +18,7 @@ conda activate whensar
 python pipeline/granule_index.py       # per-frame acquisitions + products (CMR; first run ~20 min, then ~1 min)
 python pipeline/snapshot_rop.py        # plan snapshot -> web/data/nisar_plan.fgb
 python pipeline/s1_plan.py             # Sentinel-1 plan from ESA (~30 s)
-python pipeline/s1_index.py            # Sentinel-1 SLC scenes (ASF; first run ~10 min)
+python pipeline/s1_index.py            # Sentinel-1 acquisitions (ASF; first run ~25 min)
 python pipeline/latency_stats.py       # measured product latency (ASF/CMR, ~5 min)
 python serve.py 8000                   # open http://localhost:8000
 ```
@@ -47,8 +47,12 @@ track (relative orbit + direction); Sentinel-1C and 1D alternate on the same tra
 - Upcoming passes: ESA's acquisition plans (~3 weeks ahead, merged every 6 hours by
   `pipeline/s1_plan.py`); the time over the point is interpolated along each datatake.
   Beyond the plan, each satellite's 12-day repeat is projected (dashed).
-- History: SLC scenes from ASF over the last 100 days (`pipeline/s1_index.py`).
-- OPERA RTC / CSLC / DISP and ARIA GUNW: queried live from CMR at the point.
+- Repeat: 6 days where both Sentinel-1C and 1D cover the track, 12 where one does.
+- History: acquisitions over the last 100 days from ASF RAW, SLC and medium-resolution GRD
+  footprints (`pipeline/s1_index.py`); Extra Wide swath over sea ice is GRD-only.
+- Products · last 90 days: share of *expected* passes (from the 6/12-day repeat) that were
+  acquired, and that produced SLC, GRD, OPERA RTC and CSLC (products queried live from CMR);
+  OPERA DISP and ARIA GUNW show their latest dates.
 - Interferograms: no systematic global product; the card links to ASF HyP3 on-demand InSAR
   and notes ARIA GUNW where it exists.
 
