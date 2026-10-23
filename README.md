@@ -31,8 +31,13 @@ HTTP range requests. `python tests/browser_smoke.py` screenshots a few test poin
   orbit, ~1 s). Frames never acquired yet show the datatake time, marked "approx."
 - The published plan's mode can differ from what is actually flown (~6% of frames,
   mostly 77 MHz planned vs 40+5 MHz flown); the card notes this when it happens.
-- Product availability = pass time + measured median latency (nightly sample of ASF
-  processing dates), including Urgent Response products.
+- Frames that are planned but have never produced data are left off the map. Frames not
+  acquired in the last 90 days sort last, with a warning.
+- Product availability = pass time + measured median to 90th-percentile latency (nightly
+  sample of ASF processing dates), shown as local clock times. Urgent Response timing is
+  behind a toggle; standard products (corrected orbit) stay the main estimate.
+- "Products · last 90 days" = share of planned passes that produced each product type
+  (passes still within normal processing time are excluded).
 
 ## Data sources (all public, no login)
 - NISAR Reference Observation Plan (ASF ArcGIS feature service)

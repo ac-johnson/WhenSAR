@@ -34,8 +34,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: pipeline/cache
-          key: frame-times-${{ github.run_id }}
-          restore-keys: frame-times-
+          # v2: full-archive record; a cache miss triggers a one-time backfill (~20 min)
+          key: frame-times-v2-${{ github.run_id }}
+          restore-keys: frame-times-v2-
 
       - name: Test
         run: python -m pytest -q tests

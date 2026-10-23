@@ -129,10 +129,13 @@ def main():
     raw = fetch_features(session)
     frame_times = json.loads(FRAME_TIMES.read_text()) if FRAME_TIMES.exists() else {}
     if not frame_times:
-        print(f"warning: {FRAME_TIMES} missing; next-pass times will be datatake-approximate", file=sys.stderr)
+        sys.exit(f"{FRAME_TIMES} missing or empty; run frame_times.py first")
     rows = [normalize(f, frame_times) for f in raw if f.get("geometry")]
     if len(rows) < 10000:
         sys.exit(f"Only {len(rows)} ROP frames fetched; refusing to overwrite snapshot")
+    # Planned frames that have never produced data stay off the map
+    planned = len(rows)
+    rows = [r for r in rows if r["ref_start"]]
 
     gdf = gpd.GeoDataFrame.from_features(
         [{"type": "Feature", "geometry": r.pop("geometry"), "properties": r} for r in rows], crs=4326
@@ -146,8 +149,8 @@ def main():
             info["editingInfo"]["lastEditDate"] / 1000, timezone.utc
         ).isoformat(),
         "snapshot_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "frames": len(gdf),
-        "frames_with_ref_start": int(gdf["ref_start"].notna().sum()),
+        "frames_planned": planned,
+        "frames_with_data": len(gdf),
         "plan_end": max(gdf["plan_end"].dropna()),
     }
     (args.out / "nisar_plan_meta.json").write_text(json.dumps(meta, indent=2))

@@ -76,3 +76,21 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
 a { color: var(--asc); }
 .note { margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: var(--chip); border-left: 3px solid var(--warn); font-size: 13px; }
 .browse { display: block; max-width: 100%; max-height: 170px; margin-top: 8px; border-radius: 8px; }
+
+/* Urgent Response rows are opt-in */
+body:not(.show-ur) .ur-row { display: none; }
+.h3-row { display: flex; justify-content: space-between; align-items: center; }
+.switch { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; text-transform: none; letter-spacing: 0; font-weight: 500; font-size: 12px; color: var(--muted); }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.switch .track { width: 28px; height: 16px; border-radius: 999px; background: var(--line); position: relative; transition: background 0.15s; }
+.switch .track::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--bg); transition: transform 0.15s; }
+.switch input:checked + .track { background: var(--warn); }
+.switch input:checked + .track::after { transform: translateX(12px); }
+.switch input:focus-visible + .track { outline: 2px solid var(--asc); outline-offset: 2px; }
+
+/* Product frequency */
+.freq { display: grid; grid-template-columns: 3.2em 1fr 2.8em; gap: 4px 8px; align-items: center; font-size: 13px; }
+.freq .k { color: var(--muted); font-variant-numeric: tabular-nums; }
+.freq .bar { height: 6px; border-radius: 3px; background: var(--chip); overflow: hidden; }
+.freq .bar span { display: block; height: 100%; background: var(--asc); border-radius: 3px; }
+.freq .pct { text-align: right; font-variant-numeric: tabular-nums; }

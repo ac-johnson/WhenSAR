@@ -14,6 +14,7 @@ POINTS = {
     "los_angeles": (34.05, -118.25),
     "pacific": (0.0, -150.0),
     "antarctica": (-77.85, 166.67),
+    "north_slope": (68.9745, -149.1915),
 }
 
 

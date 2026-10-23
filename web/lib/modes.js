@@ -7,8 +7,8 @@ const POL = {
   DH: "dual-pol HH/HV",
   DV: "dual-pol VV/VH",
   QP: "quad-pol",
-  QD: "quasi-quad (HH/HV + VV/VH)",
-  QQ: "quasi-quad",
+  QD: "quasi-dual (HH lower band + VV upper band)",
+  QQ: "quasi-quad (HH/HV lower band + VV/VH upper band)",
   CP: "compact-pol",
 };
 
@@ -37,7 +37,11 @@ export function describeMode(mnemonic) {
 export function planBandwidths(mnemonic) {
   const l = (mnemonic || "").split(/\s+/).find((p) => p.startsWith("L:"));
   if (!l) return null;
-  return l.split(":")[3].split("+").filter((p) => !p.startsWith("-")).map((p) => parseInt(p, 10)).sort((a, b) => a - b);
+  const f = l.split(":");
+  const bws = f[3].split("+").filter((p) => !p.startsWith("-")).map((p) => parseInt(p, 10));
+  // QD/QQ put the same bandwidth on both lower and upper bands
+  if ((f[2] === "QD" || f[2] === "QQ") && bws.length === 1) bws.push(bws[0]);
+  return bws.sort((a, b) => a - b);
 }
 
 // Granule-name mode/pol codes, e.g. ("4005", "DHDH") or ("0005", "NASV"); band A then band B

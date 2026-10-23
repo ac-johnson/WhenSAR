@@ -8,7 +8,10 @@ Also records the mode actually flown, since the published plan's modes can lag r
 
 Writes pipeline/cache/frame_times.json:
   {"034_A_019": {"start": "2026-10-14T13:08:23Z", "mode": "4005", "pol": "DHDH"}, ...}
-Usage: python pipeline/frame_times.py [--days 24]
+Frames absent from this file have no processed data and are left off the map.
+
+Usage: python pipeline/frame_times.py [--days N]
+  With no cache, backfills the whole archive (~20 min); afterwards the last 24 days suffice.
 """
 
 import argparse
@@ -25,6 +28,7 @@ from nisar_names import parse
 CMR_GRANULES_CSV = "https://cmr.earthdata.nasa.gov/search/granules.csv"
 RSLC_COLLECTION = "C2853145197-ASF"  # NISAR_L1_RSLC_PROVISIONAL_V1
 PAGE_SIZE = 2000
+ARCHIVE_START = datetime(2025, 10, 1, tzinfo=timezone.utc)  # before the first NISAR RSLC
 CACHE = Path(__file__).resolve().parent / "cache" / "frame_times.json"
 
 
@@ -72,11 +76,16 @@ def latest_starts(names):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--days", type=int, default=24, help="look-back window (24 = two cycles)")
+    ap.add_argument("--days", type=int, help="look-back window (default: 24 = two cycles, or full archive if no cache)")
     args = ap.parse_args()
 
     end = datetime.now(timezone.utc)
-    start = end - timedelta(days=args.days)
+    if args.days:
+        start = end - timedelta(days=args.days)
+    elif CACHE.exists():
+        start = end - timedelta(days=24)
+    else:
+        start = ARCHIVE_START
     times = latest_starts(granule_names(requests.Session(), start, end))
 
     # Keep entries for frames not seen in this window (e.g. skipped cycles)
@@ -85,7 +94,7 @@ def main():
     merged = previous | times
     CACHE.parent.mkdir(exist_ok=True)
     CACHE.write_text(json.dumps(merged, indent=0))
-    print(f"{len(times)} frames from last {args.days} days; {len(merged)} total in {CACHE}")
+    print(f"{len(times)} frames since {start:%Y-%m-%d}; {len(merged)} total in {CACHE}")
 
 
 if __name__ == "__main__":
