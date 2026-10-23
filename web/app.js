@@ -3,6 +3,7 @@ import { framePasses, nextIndex, countdown } from "./lib/passes.js";
 import { describeMode, describeFileMode, planBandwidths, fileBandwidths, sameBandwidths } from "./lib/modes.js";
 import { zoneAt, fmtLocal, fmtDate, fmtUTC, fmtRange } from "./lib/timefmt.js";
 import { acquisitions, productDates, browseURL, vertexLink, PRODUCTS } from "./lib/history.js";
+import { loadSites, findSite, saveSite, refreshSite, removeSite } from "./lib/sites.js";
 
 const HOUR = 3600e3;
 const DAY = 24 * HOUR;
@@ -13,7 +14,7 @@ const DEFAULT_LATENCY = { source: "ASF typical", RSLC: { p50: 48, p90: 72 }, GCO
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
-const state = { marker: null, cards: [], point: null };
+const state = { marker: null, cards: [], point: null, offlineSince: null };
 
 // Urgent Response timing is opt-in; the standard products stay the main estimate.
 const UR_KEY = "whensar.showUrgent";
@@ -23,9 +24,11 @@ function setUrgent(on) {
   try { localStorage.setItem(UR_KEY, on ? "1" : "0"); } catch {}
 }
 try { setUrgent(localStorage.getItem(UR_KEY) === "1"); } catch {}
-const modesP = fetch("data/nisar_modes.json").then((r) => r.json());
+const modesP = fetch("data/nisar_modes.json").then((r) => r.json()).catch(() => ({}));
 const latencyP = fetch("data/nisar_latency.json").then((r) => (r.ok ? r.json() : DEFAULT_LATENCY)).catch(() => DEFAULT_LATENCY);
-const metaP = fetch("data/nisar_plan_meta.json").then((r) => r.json());
+const metaP = fetch("data/nisar_plan_meta.json").then((r) => r.json()).catch(() => ({}));
+
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 
 const map = new maplibregl.Map({
   container: "map",
@@ -91,18 +94,79 @@ $("panel-head").addEventListener("click", (e) => {
     // Swipes inside a card only count when it is scrolled to the top
     start = { x: t.clientX, y: t.clientY, atTop: !card || card.scrollTop <= 0 };
   }, { passive: true });
-  $("panel").addEventListener("touchend", (e) => {
-    if (!start) return;
-    const t = e.changedTouches[0];
-    const dx = t.clientX - start.x, dy = t.clientY - start.y;
+  let last = null;
+  $("panel").addEventListener("touchmove", (e) => {
+    if (start) last = e.touches[0];
+  }, { passive: true });
+  const finish = () => {
+    if (!start || !last) return (start = last = null);
+    const dx = last.clientX - start.x, dy = last.clientY - start.y;
     const collapsed = $("panel").classList.contains("collapsed");
     if (Math.abs(dy) > 50 && Math.abs(dy) > 1.5 * Math.abs(dx)) {
       if (dy > 0 && start.atTop && !collapsed) setCollapsed(true);
       else if (dy < 0 && collapsed) setCollapsed(false);
     }
-    start = null;
-  }, { passive: true });
+    start = last = null;
+  };
+  // Browsers may cancel the touch when they take over scrolling; decide on either
+  $("panel").addEventListener("touchend", finish, { passive: true });
+  $("panel").addEventListener("touchcancel", finish, { passive: true });
 })();
+
+// Saved sites
+function updateWhere() {
+  const { lat, lon } = state.point;
+  const site = findSite(lat, lon);
+  $("where").textContent = `${site ? `${site.name} · ` : ""}${lat.toFixed(3)}, ${lon.toFixed(3)} · ${state.zone}` +
+    (state.offlineSince ? ` · offline, saved ${fmtDate(state.offlineSince, state.zone)}` : "");
+}
+function updateSaveButton() {
+  const p = state.point;
+  const saved = p && findSite(p.lat, p.lon);
+  $("save").textContent = saved ? "★" : "☆";
+  $("save").classList.toggle("on", !!saved);
+  $("save").title = saved ? "Remove from saved sites" : "Save this site (works offline)";
+}
+$("save").addEventListener("click", () => {
+  const { lat, lon } = state.point;
+  const site = findSite(lat, lon);
+  if (site) removeSite(site.id);
+  else {
+    const name = prompt("Name this site", `${lat.toFixed(3)}, ${lon.toFixed(3)}`);
+    if (name === null) return;
+    if (!saveSite(lat, lon, name.trim() || `${lat.toFixed(3)}, ${lon.toFixed(3)}`, state.cards.map((c) => c.f))) {
+      alert("Couldn't save: this browser is blocking storage.");
+    }
+  }
+  updateSaveButton();
+  updateWhere();
+  renderSites();
+});
+function renderSites() {
+  const sites = loadSites();
+  $("sites").innerHTML = sites.length
+    ? sites.map((s) => `<div class="site"><button class="open" data-id="${esc(s.id)}">${esc(s.name)}<span class="sub">${s.lat.toFixed(3)}, ${s.lon.toFixed(3)}</span></button><button class="icon-btn del" data-id="${esc(s.id)}" aria-label="Remove ${esc(s.name)}">✕</button></div>`).join("")
+    : `<div class="empty sub">No saved sites yet. Tap ☆ on a location to save it; saved sites also work offline.</div>`;
+}
+$("sites-btn").addEventListener("click", () => {
+  const open = $("sites").hidden;
+  if (open) renderSites();
+  $("sites").hidden = !open;
+  $("sites-btn").setAttribute("aria-expanded", String(open));
+});
+$("sites").addEventListener("click", (e) => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  const site = loadSites().find((s) => s.id === btn.dataset.id);
+  if (btn.classList.contains("del")) {
+    removeSite(btn.dataset.id);
+    renderSites();
+    updateSaveButton();
+  } else if (site) {
+    $("sites").hidden = true;
+    select(site.lon, site.lat, true);
+  }
+});
 
 function clearSelection() {
   state.marker?.remove();
@@ -135,14 +199,34 @@ async function select(lon, lat, fly = false, updateHistory = true) {
 
   state.point = { lon, lat };
   const t0 = performance.now();
-  const [frames, modes, latency, meta] = await Promise.all([framesAt(lon, lat), modesP, latencyP, metaP]);
+  // Offline (or the plan file unreachable): fall back to a saved copy of this site
+  let offlineSince = null;
+  const framesP = framesAt(lon, lat).catch((err) => {
+    const site = findSite(lat, lon);
+    if (!site) throw err;
+    offlineSince = new Date(site.saved);
+    return site.frames;
+  });
+  let frames, modes, latency, meta;
+  try {
+    [frames, modes, latency, meta] = await Promise.all([framesP, modesP, latencyP, metaP]);
+  } catch {
+    $("panel").hidden = false;
+    $("where").textContent = `${lat.toFixed(3)}, ${lon.toFixed(3)}`;
+    $("pager").innerHTML = "";
+    $("cards").innerHTML = `<div class="card empty">Can't load NISAR data — you may be offline. Saved sites (★) can be viewed offline.</div>`;
+    return;
+  }
+  if (!offlineSince) refreshSite(lat, lon, frames);
+  state.offlineSince = offlineSince;
+  updateSaveButton();
   const zone = zoneAt(lat, lon);
   const now = Date.now();
 
   state.cards = frames
     .filter((f) => f.properties.ref_start) // frames with no processed data stay off the map
     .map((f) => {
-      const passes = framePasses(f.properties);
+      const passes = framePasses(f.properties, meta.plan_end, now);
       const i = nextIndex(passes, now);
       const lastSeen = new Date(f.properties.ref_start);
       const acq = acquisitions(f.properties);
@@ -187,7 +271,8 @@ function panelPadding() {
 function render({ lon, lat, zone, modes, latency, meta }) {
   $("panel").hidden = false;
   setCollapsed(false);
-  $("where").textContent = `${lat.toFixed(3)}, ${lon.toFixed(3)} · ${zone}`;
+  state.zone = zone;
+  updateWhere();
   const cards = $("cards");
 
   if (!state.cards.length) {
@@ -230,7 +315,12 @@ function cardHTML(c, zone, modes, latency, meta) {
   }
   const dormantNote = c.active ? "" :
     `<div class="note">Not acquired since ${fmtDate(c.lastSeen, zone)}, although passes were planned. This pass may not be collected or processed.</div>`;
-  const upcoming = c.passes.slice(c.nextIdx + 1, c.nextIdx + 6).map((q) => `<span class="chip">${fmtDate(q.time, zone)}</span>`).join("");
+  const upcoming = c.passes
+    .slice(c.nextIdx + 1, c.nextIdx + 6)
+    .map((q) => (q.projected
+      ? `<span class="chip projected" title="Projected: beyond the published plan">${fmtDate(q.time, zone)}</span>`
+      : `<span class="chip">${fmtDate(q.time, zone)}</span>`))
+    .join("");
 
   const produce = new Set(p.produce.split(","));
   const lat = (k) => latency[k] || DEFAULT_LATENCY[k];
@@ -247,6 +337,7 @@ function cardHTML(c, zone, modes, latency, meta) {
   return `<section class="card" data-key="${c.key}">
     <div class="next-label">Next pass · <span class="countdown" data-t="${+t}">${countdown(t - Date.now())}</span></div>
     <div class="next-time">${fmtLocal(t, zone)}</div>
+    ${next.projected ? `<div class="note">Projected: the published plan ends ${esc(meta.plan_end)}. This assumes its 12-day pattern and mode continue.</div>` : ""}
     <div class="sub">${fmtUTC(t)}${next.exact ? "" : ` · <span class="approx" title="Frame start not yet observed; using datatake start">approx.</span>`}${zone !== Intl.DateTimeFormat().resolvedOptions().timeZone ? ` · your time ${fmtLocal(t, undefined)}` : ""}</div>
     ${ids}${dormantNote}
     <div class="section"><h3>Planned mode</h3>${modeLines || '<div class="sub">not specified</div>'}${flownNote}</div>
@@ -258,9 +349,19 @@ function cardHTML(c, zone, modes, latency, meta) {
       ${latency.UR_GCOV?.p50 ? `<span class="k ur-row">Urgent GCOV</span><span class="ur-row">${avail("UR_GCOV", "GCOV")}</span>` : ""}
       ${gunwPossible && latency.UR_GUNW?.p50 ? `<span class="k ur-row">Urgent GUNW</span><span class="ur-row">${avail("UR_GUNW", "GUNW")}</span>` : ""}
     </div>
-    <div class="sub ur-row" style="margin-top:4px">Urgent Response products appear only if triggered (e.g. by a USGS earthquake alert). They use a rapid orbit; the standard products above use the corrected orbit and remain the reference.</div>
+    <details class="sub ur-row ur-info">
+      <summary>Urgent Response products are made only if this pass is tasked for it</summary>
+      NISAR's Smart Tasking Tool requests Urgent Response automatically for:
+      <ul>
+        <li>earthquakes with a USGS PAGER alert of Orange or Red, anywhere;</li>
+        <li>earthquakes in or within 240&nbsp;km of the U.S. or India with a PAGER alert of Yellow, or magnitude above 7.0 and shallower than 50&nbsp;km;</li>
+        <li>volcanoes with a USGS aviation notification of Orange or Red.</li>
+      </ul>
+      Authorized users at USGS, NOAA and NASA can also request it. Standard products are still made at the usual latency, and Urgent Response products are removed after 30 days.
+      <a href="https://nisar-docs.asf.alaska.edu/urgent-response/" target="_blank" rel="noopener">ASF documentation ↗</a>
+    </details>
     <div class="sub" style="margin-top:4px">Median–90th percentile of recent processing times (${esc(latency.source || "measured")})</div></div>
-    <div class="section"><h3>Following passes</h3><div class="upcoming">${upcoming || '<span class="sub">none in current plan</span>'}</div></div>
+    <div class="section"><h3>Following passes</h3><div class="upcoming">${upcoming || '<span class="sub">none in current plan</span>'}</div>${c.passes.slice(c.nextIdx + 1, c.nextIdx + 6).some((q) => q.projected) ? '<div class="sub" style="margin-top:4px">Dashed: projected beyond the published plan</div>' : ""}</div>
     ${productsSection(c, zone)}
     ${historySection(c, zone)}
   </section>`;

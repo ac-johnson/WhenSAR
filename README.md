@@ -39,6 +39,15 @@ HTTP range requests. `python tests/browser_smoke.py` screenshots a few test poin
 - "Products · last 90 days" = share of planned passes that produced each product type
   (passes still within normal processing time are excluded).
 
+## Phone / offline use
+WhenSAR is a Progressive Web App: open the site on a phone and use the browser's
+"Add to Home Screen" / "Install app" to get an app icon. Tap ☆ on a location to save it;
+saved sites (★ list) keep a copy of their frame data in the browser, so they open
+offline, e.g. in the field. The basemap itself needs a connection.
+
+Passes beyond the end of the published observation plan are projected on the same
+12-day pattern and mode and shown dashed / labelled "projected".
+
 ## Data sources (all public, no login)
 - NISAR Reference Observation Plan (ASF ArcGIS feature service)
 - NASA CMR for acquisition history, frame start times and product frequency, precomputed

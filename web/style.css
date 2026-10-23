@@ -46,7 +46,9 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
 .grabber { display: none; }
 @media (max-width: 640px) {
   .panel { top: auto; left: 0; right: 0; bottom: 0; width: auto; height: 62vh; border-radius: 14px 14px 0 0;
-    transition: height 0.22s ease; touch-action: pan-x pan-y; }
+    transition: height 0.22s ease; overscroll-behavior: contain; }
+  .card { overscroll-behavior: contain; }
+  .grabber, .panel-head { touch-action: none; }
   /* Collapsed: just the handle, header and the next-pass headline, so the map is usable */
   .panel.collapsed { height: 148px; }
   .panel.collapsed .card { overflow: hidden; }
@@ -60,7 +62,9 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
 .pager { display: flex; gap: 6px; align-items: center; white-space: nowrap; }
 .head-right { display: flex; gap: 8px; align-items: center; }
 .close { border: 0; background: transparent; color: var(--muted); font-size: 15px; width: 28px; height: 28px; border-radius: 8px; cursor: pointer; }
-.close:hover { background: var(--chip); }
+.close:hover, .icon-btn:hover { background: var(--chip); }
+.icon-btn { border: 0; background: transparent; color: var(--muted); font-size: 17px; width: 28px; height: 28px; border-radius: 8px; cursor: pointer; }
+.icon-btn.on { color: var(--warn); }
 .pager button { border: 1px solid var(--line); background: var(--bg); color: var(--fg); border-radius: 8px;
   width: 28px; height: 28px; cursor: pointer; }
 
@@ -106,3 +110,17 @@ body:not(.show-ur) .ur-row { display: none; }
 .freq .bar { height: 6px; border-radius: 3px; background: var(--chip); overflow: hidden; }
 .freq .bar span { display: block; height: 100%; background: var(--asc); border-radius: 3px; }
 .freq .pct { text-align: right; font-variant-numeric: tabular-nums; }
+.ur-info { margin-top: 6px; }
+.ur-info summary { cursor: pointer; }
+.ur-info ul { margin: 4px 0; padding-left: 18px; }
+.chip.projected { background: transparent; border: 1px dashed var(--line); color: var(--muted); }
+.projected-tag { color: var(--warn); }
+
+/* Saved sites list */
+.sites { position: fixed; top: 60px; left: 12px; z-index: 3; width: 300px; max-width: calc(100vw - 24px); max-height: 60vh; overflow-y: auto;
+  background: var(--bg); border-radius: 12px; box-shadow: var(--shadow); padding: 6px 0; }
+.sites .empty { padding: 12px 14px; font-size: 13px; }
+.site { display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 14px; }
+.site:hover { background: var(--chip); }
+.site button.open { flex: 1; text-align: left; border: 0; background: none; color: var(--fg); cursor: pointer; font: inherit; padding: 2px 0; }
+.site .sub { display: block; font-size: 12px; }

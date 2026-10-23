@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>WhenSAR</title>
   <meta name="description" content="When will NISAR next image this spot?">
+  <meta name="theme-color" content="#2563eb">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%232563eb'/%3E%3Cpath d='M9 20 L16 8 L23 20' stroke='white' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="vendor/maplibre-gl.css">
   <link rel="stylesheet" href="style.css">
@@ -19,12 +22,15 @@
     <span class="brand">WhenSAR</span>
     <span class="mission">NISAR</span>
     <button id="locate" title="Use my location" aria-label="Use my location">◎</button>
+    <button id="sites-btn" title="Saved sites" aria-label="Saved sites" aria-expanded="false">★</button>
   </header>
+  <div id="sites" class="sites" hidden></div>
   <aside id="panel" class="panel" hidden>
     <div class="grabber" id="grabber" role="button" aria-label="Collapse or expand" tabindex="0"></div>
     <div class="panel-head" id="panel-head">
       <div id="where"></div>
       <div class="head-right">
+        <button id="save" class="icon-btn" aria-label="Save this site" title="Save this site (works offline)">☆</button>
         <div id="pager" class="pager"></div>
         <button id="close" class="close" aria-label="Close">✕</button>
       </div>

@@ -7,12 +7,16 @@
 const DAY = 86400e3;
 const CYCLE = 12 * DAY;
 
-export function framePasses(props) {
+// Beyond the end of the published plan, assume the 12-day pattern continues this far ahead
+const PROJECT_DAYS = 90;
+
+// planEnd: last date of the whole published plan ("YYYY-MM-DD")
+export function framePasses(props, planEnd, now = Date.now()) {
   const planned = JSON.parse(props.passes); // [["2026-10-26", [238]], ...]
   const datatake = (props.datatake_utc || "00:00:00").split(",")[0];
   const ref = props.ref_start ? Date.parse(props.ref_start) : null;
 
-  return planned.map(([date, modes]) => {
+  const passes = planned.map(([date, modes]) => {
     const approx = Date.parse(`${date}T${datatake}Z`);
     let t = approx;
     let exact = false;
@@ -25,8 +29,18 @@ export function framePasses(props) {
         exact = true;
       }
     }
-    return { time: new Date(t), exact, modes };
+    return { time: new Date(t), exact, modes, projected: false };
   });
+
+  // Project past the plan's end with the last planned mode, flagged so the UI can say so.
+  // Only frames still planned at the end of the plan; ones dropped earlier stay dropped.
+  const last = passes.at(-1);
+  if (last && planEnd && +last.time >= Date.parse(`${planEnd}T00:00:00Z`) - CYCLE - DAY) {
+    for (let t = +last.time + CYCLE; t < now + PROJECT_DAYS * DAY; t += CYCLE) {
+      passes.push({ time: new Date(t), exact: last.exact, modes: last.modes, projected: true });
+    }
+  }
+  return passes;
 }
 
 // Index of the first pass that hasn't finished yet (frames take ~35 s)
