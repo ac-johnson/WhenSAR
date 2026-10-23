@@ -15,8 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import geopandas as gpd
-import requests
 
+import http_session as http
 from granule_index import CACHE as GRANULE_INDEX, frame_key, frame_summary
 
 ROP_LAYER = (
@@ -122,7 +122,7 @@ def main():
     ap.add_argument("--out", type=Path, default=Path(__file__).resolve().parent.parent / "web" / "data")
     args = ap.parse_args()
 
-    session = requests.Session()
+    session = http.session()
     info = layer_info(session)
     raw = fetch_features(session)
     cache = json.loads(GRANULE_INDEX.read_text()) if GRANULE_INDEX.exists() else {}

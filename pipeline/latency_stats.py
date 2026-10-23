@@ -13,8 +13,7 @@ import statistics
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import requests
-
+import http_session as http
 from nisar_names import parse
 
 ASF_SEARCH = "https://api.daac.asf.alaska.edu/services/search/param"
@@ -69,7 +68,7 @@ def main():
     ap.add_argument("--out", type=Path, default=Path(__file__).resolve().parent.parent / "web" / "data")
     args = ap.parse_args()
 
-    session = requests.Session()
+    session = http.session()
     today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     result = {"source": f"measured {today - timedelta(days=13):%b %d}–{today - timedelta(days=7):%b %d}"}
 

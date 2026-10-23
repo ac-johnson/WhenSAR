@@ -21,8 +21,8 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import requests
 
+import http_session as http
 from nisar_names import parse
 
 CMR_GRANULES_XML = "https://cmr.earthdata.nasa.gov/search/granules.xml"
@@ -57,6 +57,8 @@ def granule_names(session, collection, **filters):
         r = session.get(CMR_GRANULES_XML, params=params, headers=headers, timeout=300)
         r.raise_for_status()
         names = _NAME.findall(r.text)
+        if names:
+            print(f"  {collection}: page through {names[-1][-60:-25]}", flush=True)
         yield from names
         after = r.headers.get("CMR-Search-After")
         if len(names) < PAGE_SIZE or not after:
@@ -129,7 +131,7 @@ def main():
     now = datetime.now(timezone.utc)
     cache = {} if args.full or not CACHE.exists() else json.loads(CACHE.read_text())
     index = cache.get("frames", {})
-    session = requests.Session()
+    session = http.session()
     counts = defaultdict(int)
 
     for product, collection in COLLECTIONS.items():
