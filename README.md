@@ -75,6 +75,3 @@ Passes beyond the end of the published observation plan are projected on the sam
 - NASA CMR for acquisition history, frame start times and product frequency, precomputed
   every 6 hours so the app makes no live catalog queries
 - ASF SearchAPI for processing dates (latency)
-
-No credentials are needed to run the app. Never commit credentials; this repo uses
-[git-secrets](https://github.com/awslabs/git-secrets) hooks.

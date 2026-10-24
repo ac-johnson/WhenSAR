@@ -11,7 +11,7 @@ with sync_playwright() as p:
     b = p.chromium.launch(channel="chrome", args=["--enable-unsafe-swiftshader"])
     ctx = b.new_context(viewport={"width": 390, "height": 844}, has_touch=True, is_mobile=True)
     pg = ctx.new_page()
-    pg.goto(url); pg.wait_for_selector(".card"); pg.wait_for_timeout(1500)
+    pg.goto(url); pg.wait_for_selector(".card"); pg.wait_for_function("document.querySelectorAll('.card').length > 1", timeout=30000); pg.wait_for_timeout(1500)
     cdp = ctx.new_cdp_session(pg)
     def drag(x0, y0, x1, y1, steps=12):
         cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x0, "y": y0}]})
