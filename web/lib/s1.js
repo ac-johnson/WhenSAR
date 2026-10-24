@@ -55,6 +55,7 @@ export function buildTracks(plan, scenes, meta, lon, lat, now = Date.now()) {
   for (const f of plan) {
     const p = f.properties;
     track(p).passes.push({ time: timeOver(p, lon, lat), sat: p.sat, mode: p.mode, pol: p.pol, projected: false });
+    track(p).planFeature ??= f;
   }
   for (const f of scenes) {
     const p = f.properties;
@@ -87,12 +88,54 @@ export function buildTracks(plan, scenes, meta, lon, lat, now = Date.now()) {
     t.passes.sort((a, b) => a.time - b.time);
     t.next = t.passes[0] || null;
     t.lastSeen = t.acq[0]?.time || null;
-    // Only real scene footprints are drawn: plan datatakes are strips thousands of km long
-    t.feature = t.footprint;
+    // Draw the latest real scene; failing that, the local piece of ESA's planned datatake strip
+    // (the whole strip is thousands of km long), marked as planned
+    t.feature = t.footprint || (t.planFeature && clipAround(t.planFeature, lon, lat));
   }
   return [...tracks.values()]
     .filter((t) => t.next || t.acq.length)
     .sort((a, b) => (a.next?.time ?? Infinity) - (b.next?.time ?? Infinity));
+}
+
+// A scene-sized piece (~350 km) of a planned datatake around the point, flagged `planned`
+function clipAround(feature, lon, lat) {
+  const dy = 1.6, dx = dy / Math.max(0.2, Math.cos((lat * Math.PI) / 180));
+  const rings = feature.geometry.type === "Polygon" ? [feature.geometry.coordinates[0]] : feature.geometry.coordinates.map((p) => p[0]);
+  for (const ring of rings) {
+    // Shift the point next to the ring's (possibly beyond +/-180) longitudes
+    let x = lon;
+    while (x - ring[0][0] > 180) x -= 360;
+    while (x - ring[0][0] < -180) x += 360;
+    const clipped = clipRing(ring, x - dx, lat - dy, x + dx, lat + dy);
+    if (clipped.length >= 3) {
+      return { type: "Feature", geometry: { type: "Polygon", coordinates: [[...clipped, clipped[0]]] }, properties: { ...feature.properties, planned: true } };
+    }
+  }
+  return null;
+}
+
+// Sutherland-Hodgman clip of a ring to a box
+function clipRing(ring, minX, minY, maxX, maxY) {
+  const edges = [
+    [(p) => p[0] >= minX, (a, b) => [minX, a[1] + ((b[1] - a[1]) * (minX - a[0])) / (b[0] - a[0])]],
+    [(p) => p[0] <= maxX, (a, b) => [maxX, a[1] + ((b[1] - a[1]) * (maxX - a[0])) / (b[0] - a[0])]],
+    [(p) => p[1] >= minY, (a, b) => [a[0] + ((b[0] - a[0]) * (minY - a[1])) / (b[1] - a[1]), minY]],
+    [(p) => p[1] <= maxY, (a, b) => [a[0] + ((b[0] - a[0]) * (maxY - a[1])) / (b[1] - a[1]), maxY]],
+  ];
+  let pts = ring.slice(0, -1);
+  for (const [inside, cross] of edges) {
+    const out = [];
+    pts.forEach((cur, i) => {
+      const prev = pts[(i + pts.length - 1) % pts.length];
+      if (inside(cur)) {
+        if (!inside(prev)) out.push(cross(prev, cur));
+        out.push(cur);
+      } else if (inside(prev)) out.push(cross(prev, cur));
+    });
+    pts = out;
+    if (!pts.length) break;
+  }
+  return pts;
 }
 
 // "VV+VH" (ASF) or "DV" (ESA plan) -> words

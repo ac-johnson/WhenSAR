@@ -61,8 +61,13 @@ const mapReady = new Promise((resolve) => map.on("load", resolve)).then(() => {
   const selected = ["boolean", ["feature-state", "selected"], false];
   map.addLayer({ id: "frames-fill", type: "fill", source: "frames",
     paint: { "fill-color": color, "fill-opacity": ["case", selected, 0.22, 0.06] } });
-  map.addLayer({ id: "frames-line", type: "line", source: "frames",
-    paint: { "line-color": color, "line-width": ["case", selected, 2.5, 1], "line-opacity": ["case", selected, 1, 0.6] } });
+  const lineWidth = ["case", selected, 2.5, 1];
+  const lineOpacity = ["case", selected, 1, 0.6];
+  // Planned-only footprints (no acquisition yet) get a dashed outline
+  map.addLayer({ id: "frames-line", type: "line", source: "frames", filter: ["!", ["get", "planned"]],
+    paint: { "line-color": color, "line-width": lineWidth, "line-opacity": lineOpacity } });
+  map.addLayer({ id: "frames-line-planned", type: "line", source: "frames", filter: ["get", "planned"],
+    paint: { "line-color": color, "line-width": lineWidth, "line-opacity": lineOpacity, "line-dasharray": [3, 2] } });
 });
 
 // Browser history: the first selection pushes an entry so Back clears it instead of leaving
@@ -333,9 +338,9 @@ const positions = (g) => (g.type === "MultiPolygon" ? g.coordinates.flat(2) : g.
 
 // Draw each card's footprint (NISAR frame, or latest Sentinel-1 scene on the track)
 async function showOnMap(lon, lat, fly) {
-  state.mapFeatures = state.cards.filter((c) => c.feature).map((c) => ({ ...c.feature, properties: { key: c.key, dir: c.dir || c.p.dir } }));
-  // Sentinel-1 plan strips span thousands of km, so only fit to scene-sized footprints
-  state.fitFeatures = state.mission === "nisar" || state.cards.some((c) => c.footprint);
+  state.mapFeatures = state.cards.filter((c) => c.feature).map((c) =>
+    ({ ...c.feature, properties: { key: c.key, dir: c.dir || c.p.dir, planned: !!c.feature.properties.planned } }));
+  state.fitFeatures = state.mapFeatures.length > 0;
   state.selected = 0;
   await drawMap(fly);
 }
@@ -354,7 +359,7 @@ function drawPoint() {
 async function drawMap(fly) {
   drawPoint();
   const features = state.mapFeatures;
-  const fitTo = state.fitFeatures ? features.filter((f) => state.mission === "nisar" || state.cards.find((c) => c.key === f.properties.key)?.footprint) : [];
+  const fitTo = state.fitFeatures ? features : [];
   if (state.proj !== "geo") {
     const m = await polarMaps[state.proj];
     if (!m) return;
@@ -598,14 +603,14 @@ function s1ProductsSection(c, zone, latency) {
   const tail = `<div class="rows" style="margin-top:6px">
       <span class="k">OPERA DISP</span><span data-s1="disp" class="loading">loading…</span>
       <span class="k">ARIA GUNW</span><span data-s1="gunw" class="loading">loading…</span></div></div>`;
-  if (!slots.length || !got) {
-    return `${head}<div class="sub" style="margin-bottom:6px">No acquisitions here in this period${c.passes.length ? " (track is in ESA's plan)" : ""}</div>${tail}`;
-  }
+  if (!slots.length) return `${head}<div class="sub" style="margin-bottom:6px">No acquisitions here in this period</div>${tail}`;
   const pct = Math.round((100 * got) / slots.length);
   return `${head}
-    <div class="sub" style="margin-bottom:6px">Share of ${slots.length} expected passes (every ${s1Repeat(c).days} days), ${fmtDate(slots[0].time, zone)} – ${fmtDate(slots.at(-1).time, zone)}</div>
+    <div class="sub" style="margin-bottom:6px">${got} of ${slots.length} expected passes acquired (every ${s1Repeat(c).days} days), ${fmtDate(slots[0].time, zone)} – ${fmtDate(slots.at(-1).time, zone)}</div>
     <div class="freq">${bar("Acquired", pct)}</div>
-    <div class="freq" data-s1="products" style="margin-top:4px"><span class="loading" style="grid-column: span 3">loading products…</span></div>
+    ${got
+      ? `<div class="freq" data-s1="products" style="margin-top:4px"><span class="loading" style="grid-column: span 3">loading products…</span></div>`
+      : `<div class="note">Nothing acquired here on this track in the last ${PRODUCT_WINDOW_DAYS} days, though ESA plans it now (dashed outline on the map). It may be newly or seasonally scheduled; ESA publishes only ~3 weeks ahead.</div>`}
     ${tail}`;
 }
 

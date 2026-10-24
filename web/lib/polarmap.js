@@ -74,7 +74,7 @@ export async function createPolarMap(container, pole, { onClick }) {
       const selected = f.get("key") === selectedKey;
       const color = COLORS[f.get("dir")] || COLORS.A;
       return new ol.style.Style({
-        stroke: new ol.style.Stroke({ color, width: selected ? 2.5 : 1 }),
+        stroke: new ol.style.Stroke({ color, width: selected ? 2.5 : 1, lineDash: f.get("planned") ? [6, 4] : undefined }),
         fill: new ol.style.Fill({ color: color + (selected ? "40" : "12") }),
         zIndex: selected ? 1 : 0,
       });
