@@ -57,8 +57,9 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
   .maplibregl-ctrl-top-right, .polar .ol-zoom { display: none; } /* pinch to zoom; frees room for the top bar */
   .proj { top: 64px; right: 12px; }
   .panel { top: auto; left: 0; right: 0; bottom: 0; width: auto; height: 62vh; border-radius: 14px 14px 0 0;
-    transition: height 0.22s ease; overscroll-behavior: contain; }
-  .card { overscroll-behavior: contain; }
+    transition: height 0.22s ease; overscroll-behavior-y: contain; }
+  /* Vertical only: stops pull-to-refresh, but sideways swipes must still reach the card strip */
+  .card { overscroll-behavior-y: contain; }
   .grabber, .panel-head { touch-action: none; }
   /* Collapsed: just the handle, header and the next-pass headline, so the map is usable */
   .panel.collapsed { height: 148px; }
