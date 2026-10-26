@@ -75,3 +75,6 @@ Passes beyond the end of the published observation plan are projected on the sam
 - NASA CMR for acquisition history, frame start times and product frequency, precomputed
   every 6 hours so the app makes no live catalog queries
 - ASF SearchAPI for processing dates (latency)
+
+## License
+MIT, see [LICENSE](LICENSE). Third-party libraries in `web/vendor/` keep their own licences.
