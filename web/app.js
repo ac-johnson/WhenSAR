@@ -1,7 +1,7 @@
 import { framesAt } from "./lib/plan.js";
 import { framePasses, nextIndex, countdown } from "./lib/passes.js";
 import { describeMode, describeFileMode, planBandwidths, fileBandwidths, sameBandwidths } from "./lib/modes.js";
-import { zoneAt, fmtLocal, fmtDate, fmtUTC, fmtRange } from "./lib/timefmt.js";
+import { zoneAt, fmtLocal, fmtDate, fmtUTC, fmtRange, dayString, zonedMidnight } from "./lib/timefmt.js";
 import { acquisitions, productDates, browseURL, vertexLink, PRODUCTS } from "./lib/history.js";
 import { loadSites, findSite, siteData, saveSite, refreshSite, removeSite } from "./lib/sites.js";
 import { buildTracks, s1Products, dispForTrack, describePol, s1VertexLink, s1Repeat, expectedSlots, productShare, HYP3_URL } from "./lib/s1.js";
@@ -11,6 +11,8 @@ import { createPolarMap } from "./lib/polarmap.js";
 const HOUR = 3600e3;
 const DAY = 24 * HOUR;
 const PRODUCT_WINDOW_DAYS = 90;
+const CYCLE_DAYS = 12; // planning window: one repeat cycle (NISAR, and each Sentinel-1 satellite)
+const PLAN_AHEAD_DAYS = 365;
 // ASF-stated typical latency for standard L1/L2 products; replaced by measured stats when available
 const DEFAULT_LATENCY = {
   source: "ASF typical",
@@ -27,6 +29,9 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&l
 const state = {
   mission: "nisar", proj: "geo", marker: null, cards: [], point: null, offlineSince: null, raw: null, controller: null,
   mapFeatures: [], fitFeatures: false, selected: 0,
+  // Planning for a later date: the chosen day ("YYYY-MM-DD", local to the point) and the
+  // window it starts, [from, until) in epoch ms. fromDate is null for "from now".
+  fromDate: null, from: null, until: null,
 };
 const polarMaps = {}; // pole -> Promise of a polar map view (lib/polarmap.js)
 
@@ -72,15 +77,18 @@ const mapReady = new Promise((resolve) => map.on("load", resolve)).then(() => {
 
 // Browser history: the first selection pushes an entry so Back clears it instead of leaving
 // the site; later selections replace it. A shared link gets the same treatment.
-// Links look like #34.05,-118.25 (NISAR) or #s1/34.05,-118.25 (Sentinel-1)
+// Links look like #34.05,-118.25 (NISAR) or #s1/34.05,-118.25 (Sentinel-1), plus /2027-03-15
+// when planning for a date
 const parseHash = () => {
-  const m = location.hash.match(/^#(?:(s1)\/)?(-?[\d.]+),(-?[\d.]+)$/);
-  return m && { mission: m[1] || "nisar", lat: +m[2], lon: +m[3] };
+  const m = location.hash.match(/^#(?:(s1)\/)?(-?[\d.]+),(-?[\d.]+)(?:\/(\d{4}-\d{2}-\d{2}))?$/);
+  return m && { mission: m[1] || "nisar", lat: +m[2], lon: +m[3], date: m[4] || null };
 };
-const hashFor = (lat, lon) => `#${state.mission === "s1" ? "s1/" : ""}${lat.toFixed(4)},${lon.toFixed(4)}`;
+const hashFor = (lat, lon) =>
+  `#${state.mission === "s1" ? "s1/" : ""}${lat.toFixed(4)},${lon.toFixed(4)}${state.fromDate ? `/${state.fromDate}` : ""}`;
 const fromHash = parseHash();
 if (fromHash) {
   history.replaceState(null, "", location.pathname);
+  state.fromDate = fromHash.date;
   setMission(fromHash.mission, false);
   select(fromHash.lon, fromHash.lat, true);
 }
@@ -88,6 +96,7 @@ window.addEventListener("popstate", () => {
   const h = parseHash();
   if (h) {
     history.replaceState({ selected: true }, "", location.hash);
+    state.fromDate = h.date;
     setMission(h.mission, false);
     select(h.lon, h.lat, true, false);
   } else clearSelection();
@@ -179,12 +188,32 @@ $("panel-head").addEventListener("click", (e) => {
   $("panel").addEventListener("touchcancel", finish, { passive: true });
 })();
 
+// Planning for a later date: a native date picker behind the calendar button. The input
+// covers the button so a tap opens the phone's own picker; desktop browsers need showPicker().
+function setFromDate(day) {
+  state.fromDate = day || null;
+  if (state.point) select(state.point.lon, state.point.lat, false);
+}
+$("date-input").addEventListener("click", (e) => {
+  try { e.target.showPicker(); } catch {}
+});
+$("date-input").addEventListener("change", (e) => setFromDate(e.target.value));
+function updateDateButton() {
+  const input = $("date-input");
+  input.min = dayString(new Date(), state.zone);
+  input.max = dayString(new Date(Date.now() + PLAN_AHEAD_DAYS * DAY), state.zone);
+  input.value = state.fromDate || input.min;
+  $("date-btn").classList.toggle("on", !!state.fromDate);
+  $("date-pick").title = state.fromDate ? `Planning from ${state.fromDate}; pick another date` : "Plan for a date: see the passes in any 12-day cycle ahead";
+}
+
 // Saved sites
 function updateWhere() {
   const { lat, lon } = state.point;
   const site = findSite(lat, lon);
   $("where").textContent = `${site ? `${site.name} · ` : ""}${lat.toFixed(3)}, ${lon.toFixed(3)} · ${state.zone}` +
     (state.offlineSince ? ` · offline, saved ${fmtDate(state.offlineSince, state.zone)}` : "");
+  updateDateButton();
 }
 function updateSaveButton() {
   const p = state.point;
@@ -263,6 +292,7 @@ async function select(lon, lat, fly = false, updateHistory = true) {
   $("hint").hidden = true;
 
   state.point = { lon, lat };
+  const zone = zoneAt(lat, lon);
   drawPoint();
   state.controller?.abort();
   state.controller = new AbortController();
@@ -296,10 +326,17 @@ async function select(lon, lat, fly = false, updateHistory = true) {
   state.raw = raw;
   state.offlineSince = offlineSince;
   updateSaveButton();
-  const zone = zoneAt(lat, lon);
+  // Planning window: the chosen local day (or now) through one repeat cycle. A date that has
+  // already passed (an old link) falls back to now.
+  const start = state.fromDate ? zonedMidnight(state.fromDate, zone) : now;
+  if (state.fromDate && start + CYCLE_DAYS * DAY < now) state.fromDate = null;
+  const from = state.fromDate ? Math.max(start, now) : now;
+  state.from = from;
+  state.until = (state.fromDate ? start : now) + CYCLE_DAYS * DAY;
+  if (updateHistory) history.replaceState({ selected: true }, "", hashFor(lat, lon));
 
   if (mission === "s1") {
-    state.cards = buildTracks(raw.plan, raw.scenes, s1Meta, lon, lat, now);
+    state.cards = buildTracks(raw.plan, raw.scenes, s1Meta, lon, lat, now, from);
     renderS1({ zone, latency, s1Meta });
     console.info(`plan lookup + render: ${(performance.now() - t0).toFixed(0)} ms, ${state.cards.length} tracks`);
     if (!offlineSince) fillS1Products(lon, lat, zone, latency, now, state.controller.signal);
@@ -311,8 +348,8 @@ async function select(lon, lat, fly = false, updateHistory = true) {
   state.cards = frames
     .filter((f) => f.properties.ref_start) // frames with no processed data stay off the map
     .map((f) => {
-      const passes = framePasses(f.properties, meta.plan_end, now);
-      const i = nextIndex(passes, now);
+      const passes = framePasses(f.properties, meta.plan_end, from);
+      const i = nextIndex(passes, from);
       const lastSeen = new Date(f.properties.ref_start);
       const acq = acquisitions(f.properties);
       return {
@@ -401,13 +438,56 @@ function render({ lon, lat, zone, modes, latency, meta }) {
     return;
   }
 
-  cards.innerHTML = state.cards.map((c) => cardHTML(c, zone, modes, latency, meta)).join("");
+  cards.innerHTML = planCardHTML(zone, nisarAgenda(modes), meta.plan_end
+    ? `Passes after ${fmtDate(new Date(`${meta.plan_end}T12:00:00Z`), zone)}, when the published plan ends, are projected on the exact 12-day repeat. The time holds, but the mode, or whether a frame is collected, can change with the next plan. Check again closer to the date.`
+    : "") + state.cards.map((c) => cardHTML(c, zone, modes, latency, meta)).join("");
   cards.querySelectorAll(".ur-toggle").forEach((t) => {
     t.checked = document.body.classList.contains("show-ur");
     t.addEventListener("change", () => setUrgent(t.checked));
   });
   cards.scrollLeft = 0;
   setupPager();
+}
+
+const nextLabel = (zone) => (state.fromDate ? `First pass from ${fmtDate(new Date(state.from), zone)}` : "Next pass");
+
+// Planning for a date: one card listing every pass over the point in the chosen 12 days,
+// across all tracks; each row jumps to its card. rows: [{time, key, dir, title, detail, projected}]
+function planCardHTML(zone, rows, projectedNote) {
+  if (!state.fromDate) return "";
+  const inWindow = rows.filter((r) => r.time >= state.from && r.time < state.until).sort((a, b) => a.time - b.time);
+  const first = new Date(state.from), last = new Date(state.until - 1);
+  const span = new Intl.DateTimeFormat(undefined, { timeZone: zone, month: "short", day: "numeric",
+    ...(last.getUTCFullYear() !== new Date().getUTCFullYear() && { year: "numeric" }) }).formatRange(first, last);
+  return `<section class="card plan-card" data-key="">
+    <div class="next-label">Your dates · ${CYCLE_DAYS}-day repeat cycle</div>
+    <div class="next-time">${span}</div>
+    <div class="sub">Every ${MISSIONS[state.mission]} pass over this point in these ${CYCLE_DAYS} days, in local time. Tap one for details.</div>
+    <div class="agenda">${inWindow.map((r) => `
+      <button class="agenda-row" data-go="${esc(r.key)}">
+        <span class="when">${fmtLocal(r.time, zone)}${r.projected ? ' <span class="projected-tag">projected</span>' : ""}</span>
+        <span class="what"><span class="chip ${r.dir === "A" ? "asc" : "desc"}">${esc(r.title)}</span> <span class="sub">${esc(r.detail)}</span></span>
+      </button>`).join("") || `<div class="sub">No passes over this point in these ${CYCLE_DAYS} days.</div>`}</div>
+    ${projectedNote && inWindow.some((r) => r.projected) ? `<div class="note">${projectedNote}</div>` : ""}
+    <div style="margin-top:12px"><button class="text-btn" data-clear-date>Back to today</button></div>
+  </section>`;
+}
+
+function nisarAgenda(modes) {
+  return state.cards.flatMap((c) => c.passes.map((q) => ({
+    time: q.time, key: c.key, dir: c.p.dir, projected: q.projected,
+    title: `Track ${c.p.track} · Frame ${c.p.frame} · ${c.p.dir === "A" ? "Asc" : "Desc"}`,
+    detail: c.active ? q.modes.map((m) => describeMode(modes[m]).lband?.text || "").filter(Boolean).join("; ")
+      : `not acquired since ${fmtDate(c.lastSeen, state.zone)}`,
+  })));
+}
+
+function s1Agenda() {
+  return state.cards.flatMap((c) => c.passes.map((q) => ({
+    time: q.time, key: c.key, dir: c.dir, projected: q.projected,
+    title: `Path ${c.path} · ${c.dir === "A" ? "Asc" : "Desc"}`,
+    detail: `${satName(q.sat)}, ${q.mode} ${describePol(q.pol)}`,
+  })));
 }
 
 function cardHTML(c, zone, modes, latency, meta) {
@@ -417,7 +497,7 @@ function cardHTML(c, zone, modes, latency, meta) {
 
   if (!next) {
     return `<section class="card" data-key="${c.key}">
-      <div class="next-label">Next pass</div>
+      <div class="next-label">${nextLabel(zone)}</div>
       <div class="next-time">Not in current plan</div>
       <div class="sub">Published plan ends ${esc(meta.plan_end)}; a new plan is expected before then.</div>
       ${ids}${productsSection(c, zone)}${historySection(c, zone)}</section>`;
@@ -450,12 +530,15 @@ function cardHTML(c, zone, modes, latency, meta) {
     c.rates.byProduct[product] === 0
       ? `<span class="sub">None produced here in the last ${PRODUCT_WINDOW_DAYS} days</span>`
       : fmtRange(new Date(+t + lat(k).p50 * HOUR), new Date(+t + lat(k).p90 * HOUR), zone);
-  // An interferogram needs a real earlier acquisition; pair with the latest one if it is recent
-  const prev = t - c.lastSeen <= 25 * DAY ? { time: c.lastSeen } : null;
+  // An interferogram needs an earlier acquisition: the latest one if it is recent, or for a
+  // pass further ahead the planned pass before it
+  const before = c.passes[c.nextIdx - 1];
+  const prev = t - c.lastSeen <= 25 * DAY ? { time: c.lastSeen }
+    : c.active && before && +before.time > Date.now() ? { time: before.time, planned: true } : null;
   const gunwPossible = produce.has("gunw") && prev;
 
   return `<section class="card" data-key="${c.key}">
-    <div class="next-label">Next pass · <span class="countdown" data-t="${+t}">${countdown(t - Date.now())}</span></div>
+    <div class="next-label">${nextLabel(zone)} · <span class="countdown" data-t="${+t}">${countdown(t - Date.now())}</span></div>
     <div class="next-time">${fmtLocal(t, zone)}</div>
     ${next.projected ? `<div class="note">Projected: the published plan ends ${esc(meta.plan_end)}. This assumes its 12-day pattern and mode continue.</div>` : ""}
     <div class="sub">${fmtUTC(t)}${next.exact ? "" : ` · <span class="approx" title="Frame start not yet observed; using datatake start">approx.</span>`}${zone !== Intl.DateTimeFormat().resolvedOptions().timeZone ? ` · your time ${fmtLocal(t, undefined)}` : ""}</div>
@@ -466,7 +549,7 @@ function cardHTML(c, zone, modes, latency, meta) {
       <div class="rows">
       <span class="k">L0B (raw)</span><span>${avail("L0B")}</span>
       ${produce.has("gcov") || produce.has("gslc") ? `<span class="k">GCOV / GSLC</span><span>${avail("GCOV", "GCOV")}</span>` : `<span class="k">RSLC</span><span>${avail("RSLC", "RSLC")}</span>`}
-      ${gunwPossible ? `<span class="k">Interferogram</span><span>${avail("GUNW", "GUNW")}${c.rates.byProduct.GUNW === 0 ? "" : `<br><span class="sub">GUNW with ${fmtDate(prev.time, zone)} acquisition</span>`}</span>` : ""}
+      ${gunwPossible ? `<span class="k">Interferogram</span><span>${avail("GUNW", "GUNW")}${c.rates.byProduct.GUNW === 0 ? "" : `<br><span class="sub">GUNW with the ${fmtDate(prev.time, zone)} ${prev.planned ? "pass, if acquired" : "acquisition"}</span>`}</span>` : ""}
       ${latency.UR_GCOV?.p50 ? `<span class="k ur-row">Urgent GCOV</span><span class="ur-row">${avail("UR_GCOV", "GCOV")}</span>` : ""}
       ${gunwPossible && latency.UR_GUNW?.p50 ? `<span class="k ur-row">Urgent GUNW</span><span class="ur-row">${avail("UR_GUNW", "GUNW")}</span>` : ""}
     </div>
@@ -539,7 +622,9 @@ function renderS1({ zone, latency, s1Meta }) {
     $("pager").innerHTML = "";
     return;
   }
-  cards.innerHTML = state.cards.map((c) => s1CardHTML(c, zone, latency, s1Meta)).join("");
+  cards.innerHTML = planCardHTML(zone, s1Agenda(),
+    "ESA publishes its plans about 3 weeks ahead. Later passes are projected on each satellite's 12-day repeat; ESA may change which ones it collects. Check again closer to the date.") +
+    state.cards.map((c) => s1CardHTML(c, zone, latency, s1Meta)).join("");
   cards.scrollLeft = 0;
   setupPager();
 }
@@ -555,14 +640,14 @@ function s1CardHTML(c, zone, latency, s1Meta) {
   const next = c.next;
   if (!next) {
     return `<section class="card" data-key="${c.key}">
-      <div class="next-label">Next pass</div><div class="next-time">Not in ESA's current plan</div>
+      <div class="next-label">${nextLabel(zone)}</div><div class="next-time">Not in ESA's current plan</div>
       ${ids()}${s1ProductsSection(c, zone, latency)}${s1HistorySection(c, zone)}</section>`;
   }
   const t = next.time;
   const win = (k) => fmtRange(new Date(+t + lat(k).p50 * HOUR), new Date(+t + lat(k).p90 * HOUR), zone);
-  const following = c.passes.slice(1, 6);
+  const following = c.passes.slice(c.nextIdx + 1, c.nextIdx + 6);
   return `<section class="card" data-key="${c.key}">
-    <div class="next-label">Next pass · <span class="countdown" data-t="${+t}">${countdown(t - Date.now())}</span></div>
+    <div class="next-label">${nextLabel(zone)} · <span class="countdown" data-t="${+t}">${countdown(t - Date.now())}</span></div>
     <div class="next-time">${fmtLocal(t, zone)}</div>
     ${next.projected ? `<div class="note">Projected: ESA's published plan for ${satName(next.sat)} ends ${fmtDate(new Date(s1Meta.plan_end?.[next.sat]), zone)}. This assumes its 12-day repeat continues.</div>` : ""}
     <div class="sub">${fmtUTC(t)}${zone !== Intl.DateTimeFormat().resolvedOptions().timeZone ? ` · your time ${fmtLocal(t, undefined)}` : ""}</div>
@@ -684,7 +769,7 @@ function fillS1Products(lon, lat, zone, latency, now, signal) {
 
 function setupPager() {
   const cards = $("cards");
-  const n = state.cards.length;
+  const n = cards.children.length;
   const pager = $("pager");
   pager.innerHTML = n > 1 ? `<button data-d="-1" aria-label="Previous">‹</button><span id="pos">1 / ${n}</span><button data-d="1" aria-label="Next">›</button>` : "";
   pager.querySelectorAll("button").forEach((b) =>
@@ -695,14 +780,25 @@ function setupPager() {
 
 function highlight(i) {
   state.selected = i;
+  const key = $("cards").children[i]?.dataset.key;
   if (state.proj === "geo" && map.getSource("frames")) {
-    state.cards.forEach((c, j) => map.setFeatureState({ source: "frames", id: c.key }, { selected: j === i }));
+    state.cards.forEach((c) => map.setFeatureState({ source: "frames", id: c.key }, { selected: c.key === key }));
   } else if (state.proj !== "geo") {
-    polarMaps[state.proj]?.then((m) => m.highlight(state.cards[i]?.key));
+    polarMaps[state.proj]?.then((m) => m.highlight(key));
   }
   const pos = $("pos");
-  if (pos) pos.textContent = `${i + 1} / ${state.cards.length}`;
+  if (pos) pos.textContent = `${i + 1} / ${$("cards").children.length}`;
 }
+
+// Planning card: a row jumps to its track's card; "Back to today" leaves planning
+$("cards").addEventListener("click", (e) => {
+  const row = e.target.closest("[data-go]");
+  const cards = $("cards");
+  if (row) {
+    const i = [...cards.children].findIndex((el) => el.dataset.key === row.dataset.go);
+    if (i >= 0) cards.scrollTo({ left: i * cards.clientWidth, behavior: "smooth" });
+  } else if (e.target.closest("[data-clear-date]")) setFromDate(null);
+});
 
 // Keep countdowns live
 setInterval(() => {

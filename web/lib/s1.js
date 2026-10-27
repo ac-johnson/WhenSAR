@@ -44,7 +44,8 @@ export async function s1Tracks(lon, lat, meta, now = Date.now()) {
   return buildTracks(plan, scenes, meta, lon, lat, now);
 }
 
-export function buildTracks(plan, scenes, meta, lon, lat, now = Date.now()) {
+// from: show passes from this time on (now, or a later date someone is planning for)
+export function buildTracks(plan, scenes, meta, lon, lat, now = Date.now(), from = now) {
   const tracks = new Map();
   const track = (p) => {
     const key = `${p.path}_${p.dir}`;
@@ -81,12 +82,13 @@ export function buildTracks(plan, scenes, meta, lon, lat, now = Date.now()) {
       const last = known[0];
       // Only satellites still covering this track recently (within two cycles of the plan's end)
       if (!last || +last.time < planEnd - 2 * CYCLE) continue;
-      for (let time = +last.time + CYCLE; time < now + PROJECT_DAYS * DAY; time += CYCLE) {
+      for (let time = +last.time + CYCLE; time < from + PROJECT_DAYS * DAY; time += CYCLE) {
         if (time > planEnd) t.passes.push({ time: new Date(time), sat, mode: last.mode, pol: last.pol, projected: true });
       }
     }
     t.passes.sort((a, b) => a.time - b.time);
-    t.next = t.passes[0] || null;
+    t.nextIdx = t.passes.findIndex((q) => q.time > from - 60e3);
+    t.next = t.passes[t.nextIdx] || null;
     t.lastSeen = t.acq[0]?.time || null;
     // Draw the latest real scene; failing that, the local piece of ESA's planned datatake strip
     // (the whole strip is thousands of km long), marked as planned

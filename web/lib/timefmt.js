@@ -39,3 +39,22 @@ export function fmtRange(a, b, timeZone) {
     ? `${day(a)}, ${clock(a)} – ${clock(b, true)}`
     : `${day(a)}, ${clock(a)} – ${day(b)}, ${clock(b, true)}`;
 }
+
+// Calendar day ("YYYY-MM-DD") of a moment at the point
+export function dayString(date, timeZone) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
+}
+
+// Start of a calendar day ("YYYY-MM-DD") in a time zone, as epoch ms
+export function zonedMidnight(day, timeZone) {
+  const guess = Date.parse(`${day}T00:00:00Z`);
+  const offset = (t) => {
+    const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone, hourCycle: "h23",
+      year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })
+      .formatToParts(t).map((x) => [x.type, x.value]));
+    return Date.parse(`${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}Z`) - t;
+  };
+  // Second pass settles days where the offset changes (daylight saving)
+  const t = guess - offset(guess);
+  return guess - offset(t);
+}

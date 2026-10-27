@@ -8,10 +8,11 @@ const DAY = 86400e3;
 const CYCLE = 12 * DAY;
 
 // Beyond the end of the published plan, assume the 12-day pattern continues this far ahead
+// (of now, or of a later date someone is planning for)
 const PROJECT_DAYS = 90;
 
 // planEnd: last date of the whole published plan ("YYYY-MM-DD")
-export function framePasses(props, planEnd, now = Date.now()) {
+export function framePasses(props, planEnd, from = Date.now()) {
   const planned = JSON.parse(props.passes); // [["2026-10-26", [238]], ...]
   const datatake = (props.datatake_utc || "00:00:00").split(",")[0];
   const ref = props.ref_start ? Date.parse(props.ref_start) : null;
@@ -36,7 +37,7 @@ export function framePasses(props, planEnd, now = Date.now()) {
   // Only frames still planned at the end of the plan; ones dropped earlier stay dropped.
   const last = passes.at(-1);
   if (last && planEnd && +last.time >= Date.parse(`${planEnd}T00:00:00Z`) - CYCLE - DAY) {
-    for (let t = +last.time + CYCLE; t < now + PROJECT_DAYS * DAY; t += CYCLE) {
+    for (let t = +last.time + CYCLE; t < from + PROJECT_DAYS * DAY; t += CYCLE) {
       passes.push({ time: new Date(t), exact: last.exact, modes: last.modes, projected: true });
     }
   }

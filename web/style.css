@@ -77,6 +77,13 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
 .close:hover, .icon-btn:hover { background: var(--chip); }
 .icon-btn { border: 0; background: transparent; color: var(--muted); font-size: 17px; width: 28px; height: 28px; border-radius: 8px; cursor: pointer; }
 .icon-btn.on { color: var(--warn); }
+/* Calendar button: the (invisible) date input sits on top so a tap opens the native picker */
+.date-pick { position: relative; display: inline-flex; }
+.date-pick .icon-btn { display: inline-flex; align-items: center; justify-content: center; }
+.date-pick:hover .icon-btn { background: var(--chip); }
+.date-pick input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: 0; padding: 0; }
+.date-pick input::-webkit-calendar-picker-indicator { position: absolute; inset: 0; width: 100%; height: 100%; cursor: pointer; }
+#date-btn.on { color: var(--fg); background: var(--chip); }
 .pager button { border: 1px solid var(--line); background: var(--bg); color: var(--fg); border-radius: 8px;
   width: 28px; height: 28px; cursor: pointer; }
 
@@ -133,3 +140,12 @@ body:not(.show-ur) .ur-row { display: none; }
 .site:hover { background: var(--chip); }
 .site button.open { flex: 1; text-align: left; border: 0; background: none; color: var(--fg); cursor: pointer; font: inherit; padding: 2px 0; }
 .site .sub { display: block; font-size: 12px; }
+
+/* Planning card: every pass in the chosen 12 days */
+.agenda { display: flex; flex-direction: column; margin-top: 12px; border-top: 1px solid var(--line); }
+.agenda-row { display: flex; flex-direction: column; gap: 3px; text-align: left; font: inherit; color: var(--fg);
+  background: none; border: 0; border-bottom: 1px solid var(--line); padding: 8px 2px; cursor: pointer; }
+.agenda-row:hover { background: var(--chip); }
+.agenda-row .when { font-weight: 600; }
+.agenda-row .what .sub { margin-left: 4px; }
+.text-btn { font: inherit; font-size: 13px; color: var(--asc); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }

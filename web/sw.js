@@ -6,7 +6,7 @@
 //   saved sites carry their own copy of the frame data instead.
 // - Map tiles and other sites: not handled (the basemap needs a connection).
 
-const CACHE = "whensar-v3";
+const CACHE = "whensar-v4";
 const SHELL = [
   "./",
   "index.html",

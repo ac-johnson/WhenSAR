@@ -41,6 +41,13 @@ HTTP range requests. `python tests/browser_smoke.py` screenshots a few test poin
 - "Products · last 90 days" = share of planned passes that produced each product type
   (passes still within normal processing time are excluded).
 
+## Planning for a later date
+The calendar button on a location picks a day up to a year ahead. A first card then lists
+every pass over the point in the 12 days from that day (one full repeat cycle), across all
+tracks, in local time; each card shows its first pass from that day. Links keep the date,
+e.g. `#34.05,-118.25/2027-03-15`, so a schedule can be shared. Passes past the published
+plans are projected on the 12-day repeat and labelled.
+
 ## Sentinel-1 mode
 Switch with the NISAR | Sentinel-1 control (links look like `#s1/lat,lon`). Cards are per
 track (relative orbit + direction); Sentinel-1C and 1D alternate on the same tracks.
