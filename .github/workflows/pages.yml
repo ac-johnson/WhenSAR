@@ -42,13 +42,17 @@ jobs:
       - name: Test
         run: python -m pytest -q tests
 
-      - name: Build data
-        run: |
-          python pipeline/granule_index.py
-          python pipeline/snapshot_rop.py
-          python pipeline/s1_plan.py
-          python pipeline/s1_index.py
-          python pipeline/latency_stats.py
+      # One step per source, so the run summary shows which one is slow or failing
+      - name: NISAR granule index (CMR)
+        run: python pipeline/granule_index.py
+      - name: NISAR plan snapshot (ASF ArcGIS)
+        run: python pipeline/snapshot_rop.py
+      - name: Sentinel-1 plan (ESA)
+        run: python pipeline/s1_plan.py
+      - name: Sentinel-1 scenes (ASF)
+        run: python pipeline/s1_index.py
+      - name: Latency stats (ASF, CMR)
+        run: python pipeline/latency_stats.py
 
       - uses: actions/upload-pages-artifact@v3
         with:
